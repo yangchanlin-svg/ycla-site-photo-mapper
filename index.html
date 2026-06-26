@@ -1,0 +1,1843 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>YCLA-工地相片定位標籤系統</title>
+
+    <!-- PWA：可加入手機主畫面、離線快取 -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="工地拍照定位">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="icon" href="icon-192.png">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons (用於現代化圖示) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PDF.js (用於瀏覽器直接渲染 PDF 建築平面圖) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+    </script>
+    <style>
+        /* 隱藏滾動條但保持功能 */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* 網格點狀背景，增加科技感與底圖界線辨識度 */
+        .canvas-bg {
+            background-color: #1e293b;
+            background-image: radial-gradient(#334155 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        /* 防止雙擊縮放干擾地圖操作 */
+        .touch-action-none {
+            touch-action: none;
+        }
+        /* 報告書列印樣式優化 */
+        @media print {
+            body {
+                background: white !important;
+                color: black !important;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .print-page-break {
+                page-break-before: always;
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans antialiased selection:bg-teal-500 selection:text-white h-screen flex flex-col overflow-hidden">
+
+    <!-- 主頂部導覽列 -->
+    <header class="bg-slate-950 border-b border-slate-800 px-4 py-3 flex items-center justify-between z-10 no-print flex-shrink-0">
+        <div class="flex items-center space-x-3">
+            <div class="bg-teal-600 p-2 rounded-lg text-white shadow-lg shadow-teal-900/30">
+                <i data-lucide="map-pin" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
+                    <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
+                    <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
+                </h1>
+                <div class="text-xs text-slate-400 flex items-center mt-0.5" id="project-title-display">
+                    <!-- JS 動態載入專案編號與名稱 -->
+                    載入中...
+                </div>
+            </div>
+        </div>
+        <div class="flex items-center space-x-2">
+            <!-- 專案管理按鈕 -->
+            <button onclick="toggleProjectModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 border border-slate-700">
+                <i data-lucide="folder-git-2" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">管理專案</span>
+            </button>
+            <!-- 導出報告按鈕 -->
+            <button onclick="enterReportMode()" class="bg-teal-600 hover:bg-teal-500 text-white px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 shadow-md shadow-teal-950/50">
+                <i data-lucide="file-text" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">輸出報告</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主要工作區域 -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+
+        <!-- 左側/底部工作看板：手機為固定底部抽屜(可展開)，桌面為固定側邊欄 -->
+        <div id="sidebar" class="fixed bottom-0 inset-x-0 md:static md:inset-auto md:bottom-auto md:w-80 bg-slate-950 border-t md:border-t-0 md:border-b-0 md:border-r border-slate-800 rounded-t-2xl md:rounded-none shadow-[0_-8px_30px_rgba(0,0,0,0.45)] md:shadow-none flex flex-col no-print z-30 flex-shrink-0">
+
+            <!-- 手機專用拖曳把手：點擊展開/收合下方設定與列表 -->
+            <button id="sidebar-handle" onclick="toggleSidebarSheet()" class="md:hidden flex flex-col items-center pt-2 pb-1.5 flex-shrink-0">
+                <span class="w-10 h-1.5 bg-slate-700 rounded-full mb-1.5"></span>
+                <span class="flex items-center gap-1 text-[11px] text-slate-400">
+                    <span id="sidebar-handle-text">已標記 0 點 · 點擊展開設定與列表</span>
+                    <i data-lucide="chevron-up" id="sidebar-toggle-chevron" class="w-3.5 h-3.5 transition-transform duration-300"></i>
+                </span>
+            </button>
+
+            <!-- 控制區 (永遠可見：手機為抽屜的「峰值」區，桌面為一般側邊欄區塊) -->
+            <div class="px-4 pb-4 pt-1 md:pt-4 md:p-4 border-b border-slate-800 flex-shrink-0">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-bold text-slate-400 tracking-wider uppercase">操作模式</span>
+                    <span id="save-status" class="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>已自動儲存
+                    </span>
+                </div>
+                <!-- 模式切換按鈕組 -->
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="btn-mode-pan" onclick="setMode('pan')" class="flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-200 bg-teal-600/10 border-teal-500/30 text-teal-400">
+                        <i data-lucide="move" class="w-5 h-5 mb-1"></i>
+                        <span class="text-xs font-medium">平移縮放</span>
+                    </button>
+                    <button id="btn-mode-add" onclick="setMode('add')" class="flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-200 bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800">
+                        <i data-lucide="plus-circle" class="w-5 h-5 mb-1"></i>
+                        <span class="text-xs font-medium">新增拍照點</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 可摺疊區：自動編碼規則 + 標記列表 + 底圖資訊。手機預設收合，桌面永遠展開 -->
+            <div id="sidebar-collapsible" class="flex flex-col max-h-0 opacity-0 overflow-hidden transition-all duration-300 ease-out md:max-h-none md:opacity-100 md:overflow-visible md:flex-1">
+
+                <!-- 智慧自動編碼規則設定區 -->
+                <div class="p-4 border-b border-slate-800 flex-shrink-0 bg-slate-900/30">
+                    <span class="text-xs font-bold text-slate-400 tracking-wider uppercase mb-2.5 block flex items-center gap-1">
+                        <i data-lucide="binary" class="w-3.5 h-3.5 text-teal-400"></i>自動編碼規則
+                    </span>
+                    <div class="space-y-3 bg-slate-950 p-3 rounded-xl border border-slate-800/80">
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-[10px] text-slate-400 font-bold mb-1">編碼字首 (Prefix)</label>
+                                <input type="text" id="cfg-prefix" oninput="updateNextLabelPreview()" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono" placeholder="如 3F-, A-">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] text-slate-400 font-bold mb-1">流水號位數</label>
+                                <select id="cfg-digits" onchange="updateNextLabelPreview()" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500">
+                                    <option value="1">1位 (1, 2...)</option>
+                                    <option value="2" selected>2位 (01, 02...)</option>
+                                    <option value="3">3位 (001, 002...)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between pt-1 border-t border-slate-800/50">
+                            <span class="text-[10px] text-slate-400">下一點產出預覽：</span>
+                            <span id="next-label-preview" class="text-xs font-mono font-bold text-teal-400 bg-teal-500/10 px-2.5 py-0.5 rounded border border-teal-500/20">01</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 拍照點點位列表 -->
+                <div class="flex-1 overflow-y-auto p-4 no-scrollbar">
+                    <h3 class="text-xs font-bold text-slate-400 tracking-wider uppercase mb-3 flex justify-between items-center">
+                        <span>已定位照片標記 (<span id="marker-count">0</span>)</span>
+                        <button onclick="clearAllMarkers()" class="text-rose-400 hover:text-rose-300 transition text-[10px] flex items-center gap-1">
+                            <i data-lucide="trash-2" class="w-3 h-3"></i>全部清空
+                        </button>
+                    </h3>
+
+                    <!-- 列表容器 -->
+                    <div id="markers-list-container" class="space-y-2">
+                        <!-- 預設空狀態 -->
+                        <div id="list-empty-state" class="text-center py-8 px-4 border border-dashed border-slate-800 rounded-xl bg-slate-900/50">
+                            <i data-lucide="image" class="w-8 h-8 text-slate-600 mx-auto mb-2"></i>
+                            <p class="text-xs text-slate-400">目前圖面上還沒有任何拍照點。</p>
+                            <p class="text-[10px] text-slate-500 mt-1">切換至「新增拍照點」並在平面圖上點選位置即可開始！</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 底圖控制資訊 -->
+                <div id="map-info-panel" class="p-3 bg-slate-900/80 border-t border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+                    <div class="flex items-center space-x-2 overflow-hidden mr-2">
+                        <i data-lucide="file-image" class="w-4 h-4 text-slate-500 flex-shrink-0"></i>
+                        <span id="filename-display" class="truncate font-mono">尚未載入平面圖</span>
+                    </div>
+                    <button onclick="triggerFileInput()" class="text-teal-400 hover:text-teal-300 font-bold flex-shrink-0 flex items-center gap-1">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>更換圖紙
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右側主畫布區域 (平面圖操作台) -->
+        <div class="flex-1 relative overflow-hidden canvas-bg flex items-center justify-center">
+
+            <!-- 遮罩：未載入平面圖時顯示 (內建拖曳 Drop Zone 感應) -->
+            <div id="upload-overlay" class="absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center p-6 z-20 transition-all duration-300">
+                <div id="drop-zone" class="max-w-md w-full bg-slate-950 border-2 border-dashed border-slate-800 p-8 rounded-2xl shadow-2xl text-center transition-all duration-300 transform">
+                    <div class="w-16 h-16 bg-teal-500/10 text-teal-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-teal-500/20">
+                        <i data-lucide="upload-cloud" class="w-8 h-8"></i>
+                    </div>
+                    <h2 class="text-lg font-bold text-white mb-2">載入建築平面圖</h2>
+                    <p class="text-sm text-slate-400 mb-6 leading-relaxed">請上傳該樓層的 <span class="text-teal-400 font-semibold">PDF 圖紙</span>、CAD 匯出的 <span class="text-teal-400 font-semibold">JPG/PNG 圖片</span>。我們將在圖面上協助您標記與關聯照片。</p>
+
+                    <div class="space-y-4">
+                        <button onclick="triggerFileInput()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-teal-950/50">
+                            <i data-lucide="file-plus" class="w-5 h-5"></i>
+                            <span>選擇 PDF 或 圖片檔案</span>
+                        </button>
+
+                        <!-- 拖曳提示說明 -->
+                        <div class="text-xs text-slate-400 flex items-center justify-center gap-1">
+                            <span class="w-6 border-t border-slate-800"></span>
+                            <span>或直接將檔案拖曳至此區域</span>
+                            <span class="w-6 border-t border-slate-800"></span>
+                        </div>
+
+                        <div class="text-xs text-slate-500">
+                            (檔案完全保存在本機，不會上傳到任何伺服器，安全保密)
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PDF 轉檔/載入中 提示 -->
+            <div id="loading-overlay" class="hidden absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center z-30">
+                <div class="text-center">
+                    <div class="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p class="text-sm text-slate-300 font-medium mb-1">正在解析圖紙檔案...</p>
+                    <p class="text-xs text-slate-500">大尺寸 PDF 渲染可能需要幾秒鐘，請稍候</p>
+                </div>
+            </div>
+
+            <!-- 隱藏的 Input 檔案選擇器 -->
+            <input type="file" id="map-file-input" accept="application/pdf, image/*" class="hidden" onchange="handleFileSelect(event)">
+
+            <!-- 隱藏的相機拍照 Input -->
+            <input type="file" id="camera-file-input" accept="image/*" capture="camera" class="hidden" onchange="handleCameraCapture(event)">
+
+            <!-- 視口 (Viewport) -->
+            <div id="viewport" class="w-full h-full relative cursor-grab active:cursor-grabbing select-none overflow-hidden touch-action-none"
+                 onmousedown="startPan(event)" onmousemove="doPan(event)" onmouseup="endPan()" onmouseleave="endPan()"
+                 ontouchstart="startTouchPan(event)" ontouchmove="doTouchPan(event)" ontouchend="endTouchPan()">
+
+                <!-- 縮放與平移容器 -->
+                <div id="pan-container" class="absolute origin-top-left transition-transform duration-75 ease-out" style="transform: translate(0px, 0px) scale(1);">
+
+                    <!-- 底圖 -->
+                    <img id="floorplan-image" src="" alt="Floorplan" class="pointer-events-none max-w-none block shadow-2xl" onload="onFloorplanLoaded()">
+
+                    <!-- 標記點圖層 -->
+                    <div id="markers-layer" class="absolute inset-0 pointer-events-none"></div>
+                </div>
+            </div>
+
+            <!-- 右下角輔助控制按鈕 -->
+            <div class="absolute bottom-28 md:bottom-4 right-4 flex flex-col space-y-2 z-10 no-print">
+                <button onclick="zoomIn()" class="w-10 h-10 bg-slate-950/90 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-lg flex items-center justify-center shadow-lg transition" title="放大">
+                    <i data-lucide="zoom-in" class="w-5 h-5"></i>
+                </button>
+                <button onclick="zoomOut()" class="w-10 h-10 bg-slate-950/90 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-lg flex items-center justify-center shadow-lg transition" title="縮小">
+                    <i data-lucide="zoom-out" class="w-5 h-5"></i>
+                </button>
+                <button onclick="resetZoom()" class="w-10 h-10 bg-slate-950/90 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-lg flex items-center justify-center shadow-lg transition" title="滿版">
+                    <i data-lucide="maximize" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- 左下角當前操作提示 -->
+            <div id="status-bubble" class="absolute bottom-28 md:bottom-4 left-4 bg-slate-950/90 border border-slate-800 text-slate-300 px-3 py-1.5 rounded-lg text-xs flex items-center space-x-2 z-10 shadow-lg pointer-events-none no-print">
+                <span class="w-2 h-2 rounded-full bg-teal-400"></span>
+                <span id="status-bubble-text">拖曳或縮放平面圖，尋找標記點</span>
+            </div>
+        </div>
+    </main>
+
+    <!-- 彈出視窗 1：設定方向與拍照彈窗 -->
+    <div id="marker-setup-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-40 no-print">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full overflow-hidden shadow-2xl flex flex-col">
+            <!-- 標題 -->
+            <div class="bg-slate-950 px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+                <div class="flex items-center space-x-2 text-teal-400">
+                    <i data-lucide="compass" class="w-5 h-5"></i>
+                    <h3 class="font-bold text-white text-sm">設定拍照方向</h3>
+                </div>
+                <span class="text-xs bg-slate-800 px-2.5 py-1 rounded-full text-slate-400 font-mono" id="modal-marker-label">編號 01</span>
+            </div>
+
+            <div class="p-6 flex-1 flex flex-col items-center">
+                <p class="text-xs text-slate-400 text-center mb-6">
+                    請使用下方羅盤或快速鍵調整紅色箭頭，使其指向您現場要拍攝的實際角度。
+                </p>
+
+                <!-- 羅盤旋轉控制區 -->
+                <div class="relative w-40 h-40 bg-slate-950 rounded-full border-2 border-slate-800 flex items-center justify-center mb-6 shadow-inner cursor-pointer" id="compass-wheel" onmousedown="startCompassDrag(event)" onmousemove="doCompassDrag(event)" onmouseup="endCompassDrag()" onmouseleave="endCompassDrag()" ontouchstart="startCompassTouch(event)" ontouchmove="doCompassTouch(event)" ontouchend="endCompassTouch()">
+                    <!-- 外圈刻度指針 -->
+                    <div class="absolute inset-2 border border-slate-800/40 rounded-full pointer-events-none"></div>
+                    <!-- 旋轉主體 -->
+                    <div id="compass-pointer" class="w-28 h-28 flex items-center justify-center transition-transform duration-100 ease-out pointer-events-none" style="transform: rotate(0deg);">
+                        <!-- 指向箭頭 -->
+                        <div class="absolute -top-1 w-0 h-0 border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent border-b-[24px] border-b-rose-500"></div>
+                        <!-- 中間圓圈與編號 -->
+                        <div class="w-12 h-12 bg-rose-600 rounded-full border-2 border-white flex items-center justify-center shadow-lg">
+                            <span class="text-white font-bold text-xs" id="modal-marker-id-inner">01</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 角度顯示與快速設定 -->
+                <div class="w-full text-center mb-6">
+                    <div class="text-xs text-slate-400 mb-2">當前方向：<span class="text-white font-mono font-bold" id="degree-text">0°</span></div>
+                    <div class="grid grid-cols-4 gap-1.5 w-full">
+                        <button onclick="setAnglePreset(0)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-2 rounded text-[11px] font-mono transition">↑ 北 (0°)</button>
+                        <button onclick="setAnglePreset(90)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-2 rounded text-[11px] font-mono transition">→ 東 (90°)</button>
+                        <button onclick="setAnglePreset(180)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-2 rounded text-[11px] font-mono transition">↓ 南 (180°)</button>
+                        <button onclick="setAnglePreset(270)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-2 rounded text-[11px] font-mono transition">← 西 (270°)</button>
+                    </div>
+                </div>
+
+                <!-- 拍照/確認操作 -->
+                <button onclick="triggerCameraCapture()" class="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3.5 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-rose-950/50">
+                    <i data-lucide="camera" class="w-5 h-5"></i>
+                    <span>確定方向，開啟相機拍照</span>
+                </button>
+            </div>
+
+            <!-- 取消按鈕 -->
+            <div class="bg-slate-950 px-5 py-3 border-t border-slate-800 flex justify-end">
+                <button onclick="cancelMarkerCreation()" class="text-xs text-slate-400 hover:text-white px-3 py-1.5 transition">
+                    取消此點
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 彈出視窗 2：檢視/修改拍照點詳情與點位自訂編碼 -->
+    <div id="marker-detail-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-40 no-print">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full overflow-hidden shadow-2xl flex flex-col">
+            <!-- 標題 -->
+            <div class="bg-slate-950 px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+                <div class="flex items-center space-x-2 text-teal-400">
+                    <i data-lucide="image" class="w-5 h-5"></i>
+                    <h3 class="font-bold text-white text-sm" id="detail-modal-title">拍照點照片</h3>
+                </div>
+                <button onclick="closeDetailModal()" class="text-slate-400 hover:text-white transition">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="p-5 flex-1 flex flex-col items-center">
+                <!-- 照片預覽 -->
+                <div class="w-full aspect-[4/3] bg-slate-950 rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center mb-4 relative group">
+                    <img id="detail-photo-preview" src="" alt="現場照片" class="w-full h-full object-cover">
+                    <div id="detail-no-photo" class="hidden text-center text-slate-500">
+                        <i data-lucide="image-off" class="w-10 h-10 mx-auto mb-2"></i>
+                        <p class="text-xs">尚未拍攝現場照片</p>
+                    </div>
+                </div>
+
+                <!-- 手動修改單點標記編號 -->
+                <div class="w-full mb-3">
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5 flex items-center gap-1">
+                        <i data-lucide="edit-3" class="w-3.5 h-3.5 text-teal-400"></i>手動修改此標籤編號 (可改文字)
+                    </label>
+                    <input type="text" id="detail-label" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-semibold font-mono transition" placeholder="例如：3F-01 或 B1-B柱">
+                </div>
+
+                <!-- 備註輸入 -->
+                <div class="w-full mb-2">
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5">照片現場說明 (備註)</label>
+                    <textarea id="detail-memo" rows="2" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 placeholder-slate-600 transition" placeholder="例如：主樑裂縫、RC灌漿氣孔瑕疵、管線配置衝突..."></textarea>
+                </div>
+            </div>
+
+            <!-- 底部動作按鈕組 -->
+            <div class="bg-slate-950 px-5 py-3 border-t border-slate-800 flex justify-between items-center">
+                <button onclick="deleteCurrentMarker()" class="text-xs text-rose-400 hover:text-rose-300 font-medium transition flex items-center gap-1">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i>刪除點位
+                </button>
+                <div class="flex space-x-2">
+                    <button onclick="retriggerCameraForDetail()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs transition flex items-center space-x-1 border border-slate-700">
+                        <i data-lucide="camera" class="w-3.5 h-3.5"></i>
+                        <span>重新拍攝</span>
+                    </button>
+                    <button onclick="saveDetailAndClose()" class="bg-teal-600 hover:bg-teal-500 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition">
+                        儲存變更
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 彈出視窗 3：切換/建立專案彈窗 -->
+    <div id="project-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-40 no-print">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col">
+            <div class="bg-slate-950 px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+                <div class="flex items-center space-x-2 text-teal-400">
+                    <i data-lucide="folder-open" class="w-5 h-5"></i>
+                    <h3 class="font-bold text-white text-sm" id="project-modal-title">專案管理中心</h3>
+                </div>
+                <button onclick="toggleProjectModal()" class="text-slate-400 hover:text-white transition">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="p-5 flex-1 flex flex-col overflow-hidden max-h-[75vh]">
+                <!-- 新增/修改專案輸入表單區 -->
+                <div class="mb-5 bg-slate-950 border border-slate-800 p-4 rounded-xl" id="project-form-container">
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider" id="project-form-title">建立新工地 / 專案</label>
+                        <button id="btn-cancel-edit" onclick="cancelProjectEdit()" class="hidden text-[10px] text-rose-400 hover:text-rose-300 font-semibold flex items-center gap-0.5">
+                            <i data-lucide="x" class="w-3 h-3"></i>取消修改
+                        </button>
+                    </div>
+                    <div class="space-y-3">
+                        <div class="grid grid-cols-3 gap-2">
+                            <input type="text" id="project-code-input" class="col-span-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 placeholder-slate-600 transition" placeholder="專案編號 (如 PJ01)">
+                            <input type="text" id="project-name-input" class="col-span-2 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 placeholder-slate-600 transition" placeholder="工程名稱 (如 林口住宅3F)">
+                        </div>
+                        <button id="btn-project-submit" onclick="handleProjectFormSubmit()" class="w-full bg-teal-600 hover:bg-teal-500 text-white py-2 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md">
+                            <i data-lucide="plus" class="w-4 h-4" id="submit-icon"></i>
+                            <span id="submit-text">新增專案</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 專案清單 -->
+                <div class="flex-1 overflow-y-auto no-scrollbar">
+                    <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">已有專案清單</h4>
+                    <div id="project-list-container" class="space-y-2">
+                        <!-- 動態載入專案列表 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全螢幕報告書預覽畫面 -->
+    <div id="report-view-container" class="hidden absolute inset-0 bg-slate-950 text-slate-900 z-50 overflow-y-auto p-4 md:p-8">
+
+        <!-- 報告書頂部工具欄 (非列印區域) -->
+        <div class="max-w-4xl mx-auto mb-6 bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between no-print shadow-xl">
+            <div class="flex items-center space-x-2 text-slate-300">
+                <button onclick="exitReportMode()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 p-2 rounded-lg transition mr-2">
+                    <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                </button>
+                <div>
+                    <h4 class="font-bold text-white text-sm">工地相片定位報告書</h4>
+                    <p class="text-xs text-slate-400">預覽並列印您的工地查核報告</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-2">
+                <button onclick="window.print()" class="bg-teal-600 hover:bg-teal-500 text-white font-bold px-4 py-2 rounded-lg text-xs transition flex items-center space-x-1.5 shadow-md shadow-teal-950/50">
+                    <i data-lucide="printer" class="w-4 h-4"></i>
+                    <span>開始列印 / 另存 PDF</span>
+                </button>
+                <button onclick="exitReportMode()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-xs transition">
+                    關閉預覽
+                </button>
+            </div>
+        </div>
+
+        <!-- 實際可列印報告書本體 (白底) -->
+        <div class="max-w-4xl mx-auto bg-white border border-gray-200 rounded-lg shadow-2xl p-8 md:p-12 min-h-[297mm] flex flex-col justify-between">
+
+            <!-- 報告封面/主標題 -->
+            <div>
+                <div class="border-b-4 border-slate-800 pb-6 mb-8">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <span class="text-xs font-bold text-teal-600 uppercase tracking-widest bg-teal-50 px-2.5 py-1 rounded">SITE INSPECTION REPORT</span>
+                            <h2 class="text-2xl font-black text-slate-900 mt-2" id="report-project-name">工地查核拍照定位報告書</h2>
+                            <p class="text-sm text-slate-600 mt-1 flex items-center gap-1" id="report-project-code-display">
+                                專案編號：<span class="font-mono font-semibold" id="report-project-code">無</span>
+                            </p>
+                            <p class="text-xs text-gray-400 mt-1" id="report-date-display">報告日期：2026/06/27</p>
+                        </div>
+                        <div class="text-right text-xs text-slate-400">
+                            <p class="font-bold text-slate-700 text-sm">建築師事務所 / 工地監造組</p>
+                            <p class="mt-1">由工地定位拍照 APP 自動產生</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 報告第一部分：標記平面圖 -->
+                <div class="mb-10">
+                    <h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-4">一、 相片定位平面索引圖</h3>
+                    <div class="relative border border-gray-300 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center p-4">
+                        <!-- 自適應包裹容器，精準控制標籤覆蓋，完全不偏移 -->
+                        <div id="report-floorplan-wrapper" class="relative inline-block mx-auto">
+                            <img id="report-floorplan-img" src="" alt="平面圖" class="max-h-[420px] max-w-full block h-auto w-auto object-contain">
+                            <!-- 定位點渲染圖層 -->
+                            <div id="report-markers-layer" class="absolute inset-0 pointer-events-none"></div>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-gray-500 mt-2 text-center">※ 平面圖面上的紅色指針編號對應下方照片列表之拍照位置與方向。</p>
+                </div>
+
+                <!-- 分頁符號 -->
+                <div class="print-page-break"></div>
+
+                <!-- 報告第二部分：照片與定位說明對照表 -->
+                <div class="mt-8">
+                    <h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-6">二、 現場影像記錄明細表</h3>
+
+                    <div id="report-photo-grid" class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <!-- 動態渲染的照片卡片 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 報告頁尾 -->
+            <div class="mt-12 pt-6 border-t border-gray-200 flex justify-between items-center text-xs text-gray-400">
+                <p>YCLA-工地相片定位標籤系統 (建築師工作流改善解決方案)</p>
+                <p class="font-bold text-slate-500">簽章核可：___________________</p>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ==========================================
+         JavaScript 邏輯
+         ========================================== -->
+    <script>
+        // --- 1. 全域變數定義 ---
+        let db; // IndexedDB 資料庫實例
+        let currentProjectId = "default-project";
+        let currentProjectName = "預設專案";
+        let currentProjectCode = "PJ-001";
+
+        let mapLoaded = false;
+        let markers = []; // 當前專案拍照點陣列 { id, label, x, y, angle, photo, memo }
+        let currentMode = 'pan'; // 'pan' | 'add'
+        let nextMarkerId = 1;
+
+        // 暫存新增中的 Marker 位置與當前編輯狀態
+        let pendingMarkerPos = { x: 0, y: 0 };
+        let editingMarkerId = null; // 當前正在編輯或拍照的 Marker ID
+        let editingProjectId = null; // 專案編輯中的 Project ID 旗標
+
+        // Pan & Zoom 狀態
+        let scale = 1;
+        let panX = 0;
+        let panY = 0;
+        let isDragging = false;
+        let startX, startY;
+
+        // 指南針 (Compass) 拖曳旋轉狀態
+        let isCompassDragging = false;
+        let currentAngle = 0;
+
+        // 手機底部抽屜 (Bottom Sheet) 展開狀態
+        let sidebarExpanded = false;
+
+        // --- 2. 初始化與 IndexedDB 設定 ---
+        window.onload = function() {
+            lucide.createIcons();
+            initDatabase();
+            setupDragAndDrop(); // 啟用拖曳上傳支援
+            registerServiceWorker(); // 註冊離線快取與 PWA 安裝支援
+
+            // 綁定視窗大小改變事件，維持畫布定位
+            window.addEventListener('resize', () => {
+                if (mapLoaded) adjustContainerToCenter();
+            });
+
+            // 綁定滑鼠滾輪縮放
+            document.getElementById('viewport').addEventListener('wheel', handleWheel, { passive: false });
+        };
+
+        // 註冊 Service Worker，啟用離線快取與「加入主畫面」安裝功能
+        function registerServiceWorker() {
+            if (!('serviceWorker' in navigator)) return;
+            navigator.serviceWorker.register('sw.js').catch(() => {
+                // 若以 file:// 開啟，瀏覽器不允許註冊 Service Worker，此處忽略即可
+            });
+        }
+
+        // 初始化 IndexedDB 本機資料庫
+        function initDatabase() {
+            const request = indexedDB.open("ArchitectPhotoMapperDB", 2);
+
+            request.onerror = function(event) {
+                showToast("本機資料庫初始化失敗，部分資料可能無法暫存", "error");
+            };
+
+            request.onsuccess = function(event) {
+                db = event.target.result;
+                loadProjectList();
+                loadCurrentProject();
+            };
+
+            request.onupgradeneeded = function(event) {
+                const dbInstance = event.target.result;
+
+                // 專案儲存
+                if (!dbInstance.objectStoreNames.contains("projects")) {
+                    dbInstance.createObjectStore("projects", { keyPath: "id" });
+                }
+
+                // 標記拍照點儲存
+                if (!dbInstance.objectStoreNames.contains("markers")) {
+                    const markerStore = dbInstance.createObjectStore("markers", { keyPath: "compositeId" });
+                    markerStore.createIndex("projectId", "projectId", { unique: false });
+                }
+            };
+        }
+
+        // --- 2.5 拖曳上傳 (Drag & Drop) 事件設定與動畫回饋 ---
+        function setupDragAndDrop() {
+            const dropZone = document.getElementById('drop-zone');
+            const uploadOverlay = document.getElementById('upload-overlay');
+            if (!dropZone || !uploadOverlay) return;
+
+            // 阻擋瀏覽器預設開啟檔案動作
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                uploadOverlay.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            // 當檔案拖曳進入區域，啟動醒目提示動畫
+            ['dragenter', 'dragover'].forEach(eventName => {
+                uploadOverlay.addEventListener(eventName, () => {
+                    dropZone.classList.add('border-teal-500', 'bg-slate-900', 'scale-[1.03]');
+                    dropZone.classList.remove('border-slate-800', 'bg-slate-950');
+                }, false);
+            });
+
+            // 當檔案離開區域或已放置，回歸一般狀態
+            ['dragleave', 'drop'].forEach(eventName => {
+                uploadOverlay.addEventListener(eventName, () => {
+                    dropZone.classList.remove('border-teal-500', 'bg-slate-900', 'scale-[1.03]');
+                    dropZone.classList.add('border-slate-800', 'bg-slate-950');
+                }, false);
+            });
+
+            // 處理置放後的檔案上傳
+            uploadOverlay.addEventListener('drop', (e) => {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                if (files && files.length > 0) {
+                    processSelectedFile(files[0]);
+                }
+            }, false);
+        }
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        // --- 3. 專案管理 (新增、讀取、編輯、切換) ---
+        function loadProjectList() {
+            const transaction = db.transaction(["projects"], "readonly");
+            const store = transaction.objectStore("projects");
+            const request = store.getAll();
+
+            request.onsuccess = function() {
+                const projects = request.result;
+                const container = document.getElementById('project-list-container');
+                container.innerHTML = "";
+
+                if (projects.length === 0) {
+                    const defaultProject = {
+                        id: "default-project",
+                        code: "PROJ-01",
+                        name: "未命名專案",
+                        numberingPrefix: "",
+                        numberingDigits: "2"
+                    };
+                    const writeTx = db.transaction(["projects"], "readwrite");
+                    writeTx.objectStore("projects").add(defaultProject);
+                    projects.push(defaultProject);
+                }
+
+                projects.forEach(p => {
+                    const isCurrent = p.id === currentProjectId;
+                    const item = document.createElement('div');
+                    item.className = `p-3 rounded-xl flex items-center justify-between transition border ${
+                        isCurrent
+                        ? 'bg-teal-600/10 border-teal-500/50 text-teal-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-800'
+                    }`;
+
+                    item.innerHTML = `
+                        <div class="flex items-center space-x-2 overflow-hidden flex-1 cursor-pointer" onclick="switchProject('${p.id}')">
+                            <i data-lucide="folder" class="w-4 h-4 flex-shrink-0 ${isCurrent ? 'text-teal-400' : 'text-slate-500'}"></i>
+                            <div class="truncate flex flex-col">
+                                <span class="text-[10px] font-mono opacity-70">${p.code || '無編號'}</span>
+                                <span class="text-xs font-semibold truncate leading-tight">${p.name}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-1.5 ml-2 flex-shrink-0">
+                            <button onclick="event.stopPropagation(); startEditProject('${p.id}', '${p.name}', '${p.code || ''}')" class="text-slate-400 hover:text-teal-400 p-1 rounded transition" title="修改專案資訊">
+                                <i data-lucide="edit-2" class="w-3.5 h-3.5"></i>
+                            </button>
+                            ${p.id !== 'default-project' ? `
+                                <button onclick="event.stopPropagation(); deleteProject('${p.id}')" class="text-slate-500 hover:text-rose-400 p-1 rounded transition" title="刪除專案">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                </button>
+                            ` : ''}
+                        </div>
+                    `;
+                    container.appendChild(item);
+                });
+                lucide.createIcons();
+            };
+        }
+
+        function toggleProjectModal() {
+            const modal = document.getElementById('project-modal');
+            modal.classList.toggle('hidden');
+            if (!modal.classList.contains('hidden')) {
+                cancelProjectEdit();
+                loadProjectList();
+            }
+        }
+
+        function handleProjectFormSubmit() {
+            const codeInput = document.getElementById('project-code-input');
+            const nameInput = document.getElementById('project-name-input');
+
+            const code = codeInput.value.trim();
+            const name = nameInput.value.trim();
+
+            if (!name) return showToast("請輸入工程專案名稱", "warning");
+            const codeFormatted = code ? code.toUpperCase() : "PJ-01";
+
+            if (editingProjectId !== null) {
+                const transaction = db.transaction(["projects"], "readwrite");
+                const store = transaction.objectStore("projects");
+
+                store.get(editingProjectId).onsuccess = function(event) {
+                    const project = event.target.result;
+                    if (project) {
+                        project.name = name;
+                        project.code = codeFormatted;
+
+                        store.put(project).onsuccess = function() {
+                            showToast("專案名稱及編號更新成功！");
+
+                            if (editingProjectId === currentProjectId) {
+                                currentProjectName = name;
+                                currentProjectCode = codeFormatted;
+                                updateHeaderDisplay();
+                            }
+
+                            cancelProjectEdit();
+                            loadProjectList();
+                        };
+                    }
+                };
+            } else {
+                const newId = "proj-" + Date.now();
+                const newProject = {
+                    id: newId,
+                    code: codeFormatted,
+                    name: name,
+                    numberingPrefix: "",
+                    numberingDigits: "2"
+                };
+
+                const transaction = db.transaction(["projects"], "readwrite");
+                const store = transaction.objectStore("projects");
+                store.add(newProject).onsuccess = function() {
+                    codeInput.value = "";
+                    nameInput.value = "";
+                    showToast("全新專案建立成功！");
+                    switchProject(newId);
+                    toggleProjectModal();
+                };
+            }
+        }
+
+        function startEditProject(id, name, code) {
+            editingProjectId = id;
+
+            document.getElementById('project-form-title').innerText = "編輯專案屬性";
+            document.getElementById('project-code-input').value = code;
+            document.getElementById('project-name-input').value = name;
+
+            document.getElementById('submit-text').innerText = "儲存修改";
+            const submitBtn = document.getElementById('btn-project-submit');
+            submitBtn.className = "w-full bg-amber-600 hover:bg-amber-500 text-white py-2 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+
+            const icon = document.getElementById('submit-icon');
+            icon.setAttribute('data-lucide', 'check');
+
+            document.getElementById('btn-cancel-edit').classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function cancelProjectEdit() {
+            editingProjectId = null;
+            document.getElementById('project-form-title').innerText = "建立新工地 / 專案";
+            document.getElementById('project-code-input').value = "";
+            document.getElementById('project-name-input').value = "";
+
+            document.getElementById('submit-text').innerText = "新增專案";
+            const submitBtn = document.getElementById('btn-project-submit');
+            submitBtn.className = "w-full bg-teal-600 hover:bg-teal-500 text-white py-2 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+
+            const icon = document.getElementById('submit-icon');
+            icon.setAttribute('data-lucide', 'plus');
+
+            document.getElementById('btn-cancel-edit').classList.add('hidden');
+            lucide.createIcons();
+        }
+
+        function switchProject(id) {
+            currentProjectId = id;
+            if (!document.getElementById('project-modal').classList.contains('hidden')) {
+                document.getElementById('project-modal').classList.add('hidden');
+            }
+            resetCanvasState();
+            loadCurrentProject();
+        }
+
+        function deleteProject(id) {
+            if (id === 'default-project') return;
+            if (!confirm("確定要刪除此專案嗎？這將會一併清空該專案下的平面圖與所有定位照片！")) return;
+
+            const tx = db.transaction(["projects", "markers"], "readwrite");
+            tx.objectStore("projects").delete(id);
+
+            const markerStore = tx.objectStore("markers");
+            const index = markerStore.index("projectId");
+            const request = index.openCursor(IDBKeyRange.only(id));
+            request.onsuccess = function(event) {
+                const cursor = event.target.result;
+                if (cursor) {
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+
+            tx.oncomplete = function() {
+                showToast("專案已成功刪除");
+                if (currentProjectId === id) {
+                    switchProject("default-project");
+                } else {
+                    loadProjectList();
+                }
+            };
+        }
+
+        function updateHeaderDisplay() {
+            const display = document.getElementById('project-title-display');
+            display.innerHTML = `
+                <span class="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded text-[10px] font-mono mr-1.5 border border-slate-700">${currentProjectCode}</span>
+                <span class="truncate font-semibold text-slate-300 text-xs">${currentProjectName}</span>
+            `;
+        }
+
+        // 載入當前選中專案底圖、拍照點與自訂編碼設定
+        function loadCurrentProject() {
+            const transaction = db.transaction(["projects"], "readonly");
+            const store = transaction.objectStore("projects");
+
+            store.get(currentProjectId).onsuccess = function(event) {
+                const proj = event.target.result;
+                if (proj) {
+                    currentProjectName = proj.name || "未命名專案";
+                    currentProjectCode = proj.code || "PJ-01";
+
+                    // 載入該專案的編碼設定，若無則設為預設
+                    document.getElementById('cfg-prefix').value = proj.numberingPrefix || "";
+                    document.getElementById('cfg-digits').value = proj.numberingDigits || "2";
+
+                    updateHeaderDisplay();
+                    updateNextLabelPreview();
+
+                    if (proj.floorplanData) {
+                        document.getElementById('filename-display').innerText = proj.filename || "底圖.png";
+                        const img = document.getElementById('floorplan-image');
+                        img.src = proj.floorplanData;
+                        document.getElementById('upload-overlay').classList.add('hidden');
+                        mapLoaded = true;
+                    } else {
+                        document.getElementById('filename-display').innerText = "尚未載入平面圖";
+                        document.getElementById('upload-overlay').classList.remove('hidden');
+                        mapLoaded = false;
+                    }
+                } else {
+                    switchProject("default-project");
+                }
+
+                loadMarkersFromDatabase();
+            };
+        }
+
+        // 儲存編碼設定至 IndexedDB
+        function saveNumberingConfig() {
+            const prefix = document.getElementById('cfg-prefix').value;
+            const digits = document.getElementById('cfg-digits').value;
+
+            const transaction = db.transaction(["projects"], "readwrite");
+            const store = transaction.objectStore("projects");
+            store.get(currentProjectId).onsuccess = function(event) {
+                const project = event.target.result;
+                if (project) {
+                    project.numberingPrefix = prefix;
+                    project.numberingDigits = digits;
+                    store.put(project);
+                }
+            };
+        }
+
+        // 動態更新下一個標籤編號的預覽
+        function updateNextLabelPreview() {
+            const nextId = getNextAvailableId();
+            const previewStr = formatLabel(nextId);
+            document.getElementById('next-label-preview').innerText = previewStr;
+            saveNumberingConfig();
+        }
+
+        // 格式化編碼
+        function formatLabel(id) {
+            const prefix = document.getElementById('cfg-prefix').value;
+            const digits = parseInt(document.getElementById('cfg-digits').value) || 2;
+            const paddedId = String(id).padStart(digits, '0');
+            return `${prefix}${paddedId}`;
+        }
+
+        function resetCanvasState() {
+            scale = 1;
+            panX = 0;
+            panY = 0;
+            updateTransform();
+            markers = [];
+            document.getElementById('markers-layer').innerHTML = "";
+            document.getElementById('floorplan-image').src = "";
+            mapLoaded = false;
+        }
+
+        // --- 4. 檔案處理 (PDF 轉 Canvas 與底圖載入) ---
+        function triggerFileInput() {
+            document.getElementById('map-file-input').click();
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                processSelectedFile(file);
+            }
+        }
+
+        // 核心檔案載入分配器 (支援對話選擇與拖曳置放)
+        function processSelectedFile(file) {
+            const loading = document.getElementById('loading-overlay');
+            loading.classList.remove('hidden');
+
+            document.getElementById('filename-display').innerText = file.name;
+
+            if (file.type === "application/pdf") {
+                const fileReader = new FileReader();
+                fileReader.onload = function() {
+                    const typedarray = new Uint8Array(this.result);
+
+                    pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
+                        pdf.getPage(1).then(function(page) {
+                            const viewport = page.getViewport({ scale: 2.0 });
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.height = viewport.height;
+                            canvas.width = viewport.width;
+
+                            const renderContext = {
+                                canvasContext: context,
+                                viewport: viewport
+                            };
+
+                            page.render(renderContext).promise.then(function() {
+                                const base64Image = canvas.toDataURL("image/jpeg", 0.8);
+                                saveFloorplanToDb(base64Image, file.name);
+                            });
+                        });
+                    }).catch(err => {
+                        loading.classList.add('hidden');
+                        showToast("無法解析 PDF 檔案，請確保檔案未損壞", "error");
+                    });
+                };
+                fileReader.readAsArrayBuffer(file);
+            } else if (file.type.startsWith("image/")) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    compressFloorplanImage(e.target.result, file.name);
+                };
+                reader.readAsDataURL(file);
+            } else {
+                loading.classList.add('hidden');
+                showToast("不支援的檔案格式，請上傳 PDF 或 圖片", "warning");
+            }
+        }
+
+        function compressFloorplanImage(base64Str, filename) {
+            const img = new Image();
+            img.onload = function() {
+                const maxDim = 3500;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > maxDim || height > maxDim) {
+                    if (width > height) {
+                        height = Math.round((height * maxDim) / width);
+                        width = maxDim;
+                    } else {
+                        width = Math.round((width * maxDim) / height);
+                        height = maxDim;
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    const compressedBase64 = canvas.toDataURL("image/jpeg", 0.85);
+                    saveFloorplanToDb(compressedBase64, filename);
+                } else {
+                    saveFloorplanToDb(base64Str, filename);
+                }
+            };
+            img.src = base64Str;
+        }
+
+        function saveFloorplanToDb(base64Data, filename) {
+            const transaction = db.transaction(["projects"], "readwrite");
+            const store = transaction.objectStore("projects");
+
+            store.get(currentProjectId).onsuccess = function(event) {
+                const project = event.target.result || { id: currentProjectId, name: currentProjectName, code: currentProjectCode };
+                project.floorplanData = base64Data;
+                project.filename = filename;
+
+                store.put(project).onsuccess = function() {
+                    document.getElementById('floorplan-image').src = base64Data;
+                    document.getElementById('upload-overlay').classList.add('hidden');
+                    document.getElementById('loading-overlay').classList.add('hidden');
+                    mapLoaded = true;
+                    showToast("底圖載入成功！");
+                };
+            };
+        }
+
+        function onFloorplanLoaded() {
+            adjustContainerToCenter();
+        }
+
+        function adjustContainerToCenter() {
+            const viewport = document.getElementById('viewport');
+            const img = document.getElementById('floorplan-image');
+
+            if (!img.complete || img.naturalWidth === 0) return;
+
+            const vWidth = viewport.clientWidth;
+            const vHeight = viewport.clientHeight;
+            const imgWidth = img.naturalWidth;
+            const imgHeight = img.naturalHeight;
+
+            const scaleX = vWidth / imgWidth;
+            const scaleY = vHeight / imgHeight;
+            scale = Math.min(scaleX, scaleY) * 0.95;
+            if (scale > 2) scale = 1.5;
+
+            panX = (vWidth - (imgWidth * scale)) / 2;
+            panY = (vHeight - (imgHeight * scale)) / 2;
+
+            updateTransform();
+        }
+
+        // --- 5. 互動畫布控制器 (Pan & Zoom) ---
+        function updateTransform() {
+            const container = document.getElementById('pan-container');
+            container.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        }
+
+        function handleWheel(e) {
+            if (!mapLoaded) return;
+            e.preventDefault();
+            const zoomFactor = 1.1;
+            const delta = e.deltaY < 0 ? zoomFactor : 1 / zoomFactor;
+            zoomAtPoint(e.clientX, e.clientY, delta);
+        }
+
+        function zoomAtPoint(clientX, clientY, factor) {
+            const viewport = document.getElementById('viewport');
+            const rect = viewport.getBoundingClientRect();
+
+            const mouseX = clientX - rect.left;
+            const mouseY = clientY - rect.top;
+
+            const nextScale = Math.min(Math.max(scale * factor, 0.1), 10);
+
+            panX = mouseX - (mouseX - panX) * (nextScale / scale);
+            panY = mouseY - (mouseY - panY) * (nextScale / scale);
+            scale = nextScale;
+
+            updateTransform();
+        }
+
+        function zoomIn() {
+            if (!mapLoaded) return;
+            const vp = document.getElementById('viewport');
+            zoomAtPoint(vp.clientWidth/2, vp.clientHeight/2, 1.2);
+        }
+
+        function zoomOut() {
+            if (!mapLoaded) return;
+            const vp = document.getElementById('viewport');
+            zoomAtPoint(vp.clientWidth/2, vp.clientHeight/2, 1/1.2);
+        }
+
+        function resetZoom() {
+            if (!mapLoaded) return;
+            adjustContainerToCenter();
+        }
+
+        function startPan(e) {
+            if (!mapLoaded || currentMode !== 'pan') return;
+            isDragging = true;
+            startX = e.clientX - panX;
+            startY = e.clientY - panY;
+            e.preventDefault();
+        }
+
+        function doPan(e) {
+            if (!isDragging) return;
+            panX = e.clientX - startX;
+            panY = e.clientY - startY;
+            updateTransform();
+        }
+
+        function endPan() {
+            isDragging = false;
+        }
+
+        let tpState = {
+            isDragging: false,
+            lastX: 0,
+            lastY: 0,
+            isPinching: false,
+            initialDistance: 0,
+            initialScale: 1
+        };
+
+        function startTouchPan(e) {
+            if (!mapLoaded) return;
+
+            if (e.touches.length === 1 && currentMode === 'pan') {
+                tpState.isDragging = true;
+                tpState.lastX = e.touches[0].clientX - panX;
+                tpState.lastY = e.touches[0].clientY - panY;
+            } else if (e.touches.length === 2) {
+                tpState.isDragging = false;
+                tpState.isPinching = true;
+                tpState.initialDistance = getTouchDistance(e);
+                tpState.initialScale = scale;
+            }
+        }
+
+        function doTouchPan(e) {
+            if (!mapLoaded) return;
+
+            if (tpState.isDragging && e.touches.length === 1 && currentMode === 'pan') {
+                panX = e.touches[0].clientX - tpState.lastX;
+                panY = e.touches[0].clientY - tpState.lastY;
+                updateTransform();
+            } else if (tpState.isPinching && e.touches.length === 2) {
+                const currentDist = getTouchDistance(e);
+                const factor = currentDist / tpState.initialDistance;
+                const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                zoomAtPoint(centerX, centerY, factor > 1 ? 1.05 : 0.95);
+            }
+        }
+
+        function endTouchPan() {
+            tpState.isDragging = false;
+            tpState.isPinching = false;
+        }
+
+        function getTouchDistance(e) {
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        // --- 5.5 手機底部抽屜展開/收合 ---
+        function toggleSidebarSheet(forceState) {
+            if (window.matchMedia('(min-width: 768px)').matches) return; // 桌面版永遠展開，不需切換
+
+            sidebarExpanded = typeof forceState === 'boolean' ? forceState : !sidebarExpanded;
+            const collapsible = document.getElementById('sidebar-collapsible');
+            const chevron = document.getElementById('sidebar-toggle-chevron');
+
+            if (sidebarExpanded) {
+                collapsible.classList.remove('max-h-0', 'opacity-0', 'overflow-hidden');
+                collapsible.classList.add('max-h-[65vh]', 'opacity-100', 'overflow-y-auto');
+                chevron.style.transform = 'rotate(180deg)';
+            } else {
+                collapsible.classList.add('max-h-0', 'opacity-0', 'overflow-hidden');
+                collapsible.classList.remove('max-h-[65vh]', 'opacity-100', 'overflow-y-auto');
+                chevron.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        function updateSidebarHandleText() {
+            const handleText = document.getElementById('sidebar-handle-text');
+            if (!handleText) return;
+            handleText.innerText = markers.length === 0
+                ? "尚無標記點 · 點擊展開設定"
+                : `已標記 ${markers.length} 點 · 點擊展開列表`;
+        }
+
+        // --- 6. 模式切換與畫布點擊 ---
+        function setMode(mode) {
+            currentMode = mode;
+            const btnPan = document.getElementById('btn-mode-pan');
+            const btnAdd = document.getElementById('btn-mode-add');
+            const statusText = document.getElementById('status-bubble-text');
+            const viewport = document.getElementById('viewport');
+
+            if (mode === 'pan') {
+                btnPan.className = "flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-200 bg-teal-600/10 border-teal-500/30 text-teal-400";
+                btnAdd.className = "flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-200 bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800";
+                statusText.innerText = "拖曳或雙指縮放平面圖，尋找標記位置";
+                viewport.style.cursor = "grab";
+            } else {
+                btnPan.className = "flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-200 bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800";
+                btnAdd.className = "flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-200 bg-rose-600/10 border-rose-500/30 text-rose-400";
+                statusText.innerText = "請點擊圖面上任意位置以新增拍照編號點";
+                viewport.style.cursor = "crosshair";
+            }
+        }
+
+        document.getElementById('viewport').addEventListener('click', function(e) {
+            if (!mapLoaded || currentMode !== 'add') return;
+            if (isDragging) return;
+
+            const img = document.getElementById('floorplan-image');
+            const rect = img.getBoundingClientRect();
+
+            const clickX_onImg = e.clientX - rect.left;
+            const clickY_onImg = e.clientY - rect.top;
+
+            const percentX = clickX_onImg / rect.width;
+            const percentY = clickY_onImg / rect.height;
+
+            if (percentX < 0 || percentX > 1 || percentY < 0 || percentY > 1) return;
+
+            pendingMarkerPos = { x: percentX, y: percentY };
+
+            const predictId = getNextAvailableId();
+            nextMarkerId = predictId;
+            const generatedLabel = formatLabel(predictId);
+
+            openMarkerSetupModal(generatedLabel);
+        });
+
+        function getNextAvailableId() {
+            if (markers.length === 0) return 1;
+            const sortedIds = markers.map(m => m.id).sort((a,b) => a-b);
+            let next = 1;
+            for (let id of sortedIds) {
+                if (id === next) next++;
+                else if (id > next) return next;
+            }
+            return next;
+        }
+
+        // --- 7. 方向設定與 360 度羅盤控制 ---
+        function openMarkerSetupModal(label) {
+            document.getElementById('modal-marker-label').innerText = `預計編號 ${label}`;
+            document.getElementById('modal-marker-id-inner').innerText = label;
+            currentAngle = 0;
+            updateCompassVisuals();
+            document.getElementById('marker-setup-modal').classList.remove('hidden');
+        }
+
+        function cancelMarkerCreation() {
+            document.getElementById('marker-setup-modal').classList.add('hidden');
+        }
+
+        // 設置羅盤快速鍵角度
+        function setAnglePreset(angle) {
+            currentAngle = angle;
+            updateCompassVisuals();
+        }
+
+        function updateCompassVisuals() {
+            document.getElementById('compass-pointer').style.transform = `rotate(${currentAngle}deg)`;
+            document.getElementById('degree-text').innerText = `${Math.round(currentAngle)}°`;
+        }
+
+        function startCompassDrag(e) {
+            isCompassDragging = true;
+            doCompassDrag(e);
+        }
+
+        function doCompassDrag(e) {
+            if (!isCompassDragging) return;
+            calculateAngleFromEvent(e.clientX, e.clientY);
+        }
+
+        function endCompassDrag() {
+            isCompassDragging = false;
+        }
+
+        function startCompassTouch(e) {
+            isCompassDragging = true;
+            doCompassTouch(e);
+        }
+
+        function doCompassTouch(e) {
+            if (!isCompassDragging || e.touches.length === 0) return;
+            calculateAngleFromEvent(e.touches[0].clientX, e.touches[0].clientY);
+        }
+
+        function endCompassTouch() {
+            isCompassDragging = false;
+        }
+
+        function calculateAngleFromEvent(clientX, clientY) {
+            const wheel = document.getElementById('compass-wheel');
+            const rect = wheel.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const dx = clientX - centerX;
+            const dy = clientY - centerY;
+
+            let angleRad = Math.atan2(dy, dx);
+            let angleDeg = angleRad * (180 / Math.PI) + 90;
+
+            if (angleDeg < 0) angleDeg += 360;
+            currentAngle = angleDeg;
+
+            updateCompassVisuals();
+        }
+
+        // --- 8. 相機呼叫與照片處理 ---
+        function triggerCameraCapture() {
+            document.getElementById('camera-file-input').click();
+        }
+
+        function handleCameraCapture(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            document.getElementById('marker-setup-modal').classList.add('hidden');
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                compressPhotoAndSave(e.target.result);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function compressPhotoAndSave(base64Str) {
+            const img = new Image();
+            img.onload = function() {
+                const maxDim = 1200;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > maxDim || height > maxDim) {
+                    if (width > height) {
+                        height = Math.round((height * maxDim) / width);
+                        width = maxDim;
+                    } else {
+                        width = Math.round((width * maxDim) / height);
+                        height = maxDim;
+                    }
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                const compressedBase64 = canvas.toDataURL("image/jpeg", 0.75);
+
+                if (editingMarkerId !== null) {
+                    updateExistingMarkerPhoto(editingMarkerId, compressedBase64);
+                } else {
+                    createNewMarker(compressedBase64);
+                }
+            };
+            img.src = base64Str;
+        }
+
+        // --- 9. 拍照標籤 (Markers) 資料庫儲存與渲染 ---
+        function createNewMarker(photoData) {
+            const nextId = getNextAvailableId();
+            const labelStr = formatLabel(nextId);
+
+            const newMarker = {
+                compositeId: `${currentProjectId}-${nextId}`,
+                projectId: currentProjectId,
+                id: nextId,
+                label: labelStr,
+                x: pendingMarkerPos.x,
+                y: pendingMarkerPos.y,
+                angle: currentAngle,
+                photo: photoData,
+                memo: ""
+            };
+
+            const tx = db.transaction(["markers"], "readwrite");
+            const store = tx.objectStore("markers");
+
+            store.add(newMarker).onsuccess = function() {
+                markers.push(newMarker);
+                renderMarkerOnCanvas(newMarker);
+                updateMarkersListUI();
+                updateNextLabelPreview();
+                showToast(`定位標籤 ${labelStr} 新增完成並關聯照片`);
+                openDetailModal(newMarker.id);
+                setMode('pan');
+            };
+        }
+
+        function updateExistingMarkerPhoto(id, photoData) {
+            const compositeId = `${currentProjectId}-${id}`;
+            const tx = db.transaction(["markers"], "readwrite");
+            const store = tx.objectStore("markers");
+
+            store.get(compositeId).onsuccess = function(event) {
+                const marker = event.target.result;
+                if (marker) {
+                    marker.photo = photoData;
+                    store.put(marker).onsuccess = function() {
+                        const idx = markers.findIndex(m => m.id === id);
+                        if (idx !== -1) markers[idx].photo = photoData;
+
+                        document.getElementById('detail-photo-preview').src = photoData;
+                        document.getElementById('detail-no-photo').classList.add('hidden');
+                        document.getElementById('detail-photo-preview').classList.remove('hidden');
+
+                        refreshMarkerUI(marker);
+                        showToast(`照片已更新`);
+                    };
+                }
+            };
+            editingMarkerId = null;
+        }
+
+        function loadMarkersFromDatabase() {
+            markers = [];
+            document.getElementById('markers-layer').innerHTML = "";
+
+            if (!db) return;
+            const transaction = db.transaction(["markers"], "readonly");
+            const store = transaction.objectStore("markers");
+            const index = store.index("projectId");
+            const request = index.getAll(IDBKeyRange.only(currentProjectId));
+
+            request.onsuccess = function() {
+                const results = request.result;
+                results.sort((a,b) => a.id - b.id);
+                markers = results;
+
+                markers.forEach(m => {
+                    renderMarkerOnCanvas(m);
+                });
+                updateMarkersListUI();
+            };
+        }
+
+        function renderMarkerOnCanvas(marker) {
+            const layer = document.getElementById('markers-layer');
+            const div = document.createElement('div');
+            div.id = `map-marker-${marker.id}`;
+            div.className = "absolute pointer-events-auto cursor-pointer transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center";
+            div.style.left = `${marker.x * 100}%`;
+            div.style.top = `${marker.y * 100}%`;
+
+            div.innerHTML = `
+                <div class="marker-arrow transition-transform duration-200" style="transform: rotate(${marker.angle}deg);">
+                    <svg width="34" height="34" viewBox="0 0 100 100" class="fill-rose-500 drop-shadow-lg">
+                        <polygon points="50,5 25,45 42,45 42,95 58,95 58,45 75,45" />
+                    </svg>
+                </div>
+                <!-- 標籤文字容器 -->
+                <div class="label-circle absolute px-1.5 py-0.5 min-w-[28px] h-7 bg-rose-600 hover:bg-rose-500 border-2 border-white rounded-full flex items-center justify-center text-[10px] font-black text-white shadow-md select-none transition truncate max-w-[60px]">
+                    ${marker.label}
+                </div>
+            `;
+
+            div.addEventListener('click', function(e) {
+                e.stopPropagation();
+                openDetailModal(marker.id);
+            });
+
+            layer.appendChild(div);
+        }
+
+        function refreshMarkerUI(marker) {
+            const target = document.getElementById(`map-marker-${marker.id}`);
+            if (target) {
+                const arrow = target.querySelector('.marker-arrow');
+                if (arrow) arrow.style.transform = `rotate(${marker.angle}deg)`;
+
+                const labelCircle = target.querySelector('.label-circle');
+                if (labelCircle) labelCircle.innerText = marker.label;
+            }
+        }
+
+        function updateMarkersListUI() {
+            const container = document.getElementById('markers-list-container');
+            const emptyState = document.getElementById('list-empty-state');
+            const countDisplay = document.getElementById('marker-count');
+
+            countDisplay.innerText = markers.length;
+            updateSidebarHandleText();
+
+            if (markers.length === 0) {
+                emptyState.classList.remove('hidden');
+                Array.from(container.children).forEach(child => {
+                    if (child.id !== 'list-empty-state') child.remove();
+                });
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+
+            Array.from(container.children).forEach(child => {
+                if (child.id !== 'list-empty-state') child.remove();
+            });
+
+            markers.forEach(m => {
+                const card = document.createElement('div');
+                card.className = "bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 p-3 rounded-xl transition duration-200 flex items-center justify-between";
+                card.innerHTML = `
+                    <div class="flex items-center space-x-3 cursor-pointer overflow-hidden flex-1" onclick="focusOnMarker(${m.id})">
+                        <div class="w-10 h-10 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 flex-shrink-0 relative">
+                            <img src="${m.photo || ''}" class="w-full h-full object-cover">
+                            <span class="absolute inset-x-0 bottom-0 bg-rose-600/90 text-[9px] text-white font-bold text-center leading-none py-0.5 truncate px-0.5">
+                                ${m.label}
+                            </span>
+                        </div>
+                        <div class="overflow-hidden">
+                            <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                                標籤編號: <span class="text-rose-400 font-mono truncate max-w-[90px]">${m.label}</span>
+                                <span class="text-[10px] text-slate-500 font-normal flex-shrink-0">方向: ${Math.round(m.angle)}°</span>
+                            </div>
+                            <p class="text-[10px] text-slate-400 truncate mt-0.5" id="list-memo-${m.id}">
+                                ${m.memo || '無備註描述...'}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-1 ml-2">
+                        <button onclick="openDetailModal(${m.id})" class="text-slate-400 hover:text-white p-1 rounded transition" title="編輯點位">
+                            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        function focusOnMarker(id) {
+            const marker = markers.find(m => m.id === id);
+            if (!marker) return;
+
+            const viewport = document.getElementById('viewport');
+            const img = document.getElementById('floorplan-image');
+
+            const vWidth = viewport.clientWidth;
+            const vHeight = viewport.clientHeight;
+
+            setMode('pan');
+            scale = 1.5;
+
+            const markerX_onImg = marker.x * img.naturalWidth;
+            const markerY_onImg = marker.y * img.naturalHeight;
+
+            panX = vWidth/2 - (markerX_onImg * scale);
+            panY = vHeight/2 - (markerY_onImg * scale);
+
+            updateTransform();
+
+            const markerDiv = document.getElementById(`map-marker-${id}`);
+            if (markerDiv) {
+                markerDiv.classList.add('animate-bounce');
+                setTimeout(() => {
+                    markerDiv.classList.remove('animate-bounce');
+                }, 1500);
+            }
+        }
+
+        // --- 10. 拍照標記點詳情修改與刪除 ---
+        function openDetailModal(id) {
+            const marker = markers.find(m => m.id === id);
+            if (!marker) return;
+
+            editingMarkerId = id;
+            document.getElementById('detail-modal-title').innerText = `修改標籤內容`;
+
+            const preview = document.getElementById('detail-photo-preview');
+            const noPhoto = document.getElementById('detail-no-photo');
+
+            if (marker.photo) {
+                preview.src = marker.photo;
+                preview.classList.remove('hidden');
+                noPhoto.classList.add('hidden');
+            } else {
+                preview.classList.add('hidden');
+                noPhoto.classList.remove('hidden');
+            }
+
+            // 帶入原本標記名稱與備註
+            document.getElementById('detail-label').value = marker.label || "";
+            document.getElementById('detail-memo').value = marker.memo || "";
+            document.getElementById('marker-detail-modal').classList.remove('hidden');
+        }
+
+        function closeDetailModal() {
+            document.getElementById('marker-detail-modal').classList.add('hidden');
+            editingMarkerId = null;
+        }
+
+        function retriggerCameraForDetail() {
+            if (editingMarkerId === null) return;
+            document.getElementById('camera-file-input').click();
+        }
+
+        function saveDetailAndClose() {
+            if (editingMarkerId === null) return;
+
+            const compositeId = `${currentProjectId}-${editingMarkerId}`;
+            const memoText = document.getElementById('detail-memo').value.trim();
+            const newLabelText = document.getElementById('detail-label').value.trim();
+
+            if (!newLabelText) {
+                showToast("編號不得為空！", "warning");
+                return;
+            }
+
+            const tx = db.transaction(["markers"], "readwrite");
+            const store = tx.objectStore("markers");
+
+            store.get(compositeId).onsuccess = function(event) {
+                const marker = event.target.result;
+                if (marker) {
+                    marker.memo = memoText;
+                    marker.label = newLabelText;
+
+                    store.put(marker).onsuccess = function() {
+                        const idx = markers.findIndex(m => m.id === editingMarkerId);
+                        if (idx !== -1) {
+                            markers[idx].memo = memoText;
+                            markers[idx].label = newLabelText;
+                        }
+
+                        // 即時更新地圖上的 Marker 文字外觀，無需重繪整個圖層
+                        const markerDiv = document.getElementById(`map-marker-${editingMarkerId}`);
+                        if (markerDiv) {
+                            const labelCircle = markerDiv.querySelector('.label-circle');
+                            if (labelCircle) labelCircle.innerText = newLabelText;
+                        }
+
+                        updateMarkersListUI();
+                        updateNextLabelPreview();
+                        showToast(`已儲存標記點修改`);
+                        closeDetailModal();
+                    };
+                }
+            };
+        }
+
+        function deleteCurrentMarker() {
+            if (editingMarkerId === null) return;
+            if (!confirm("確定要刪除這個定位拍照點嗎？此動作將無法還原。")) return;
+
+            const compositeId = `${currentProjectId}-${editingMarkerId}`;
+            const labelStr = String(editingMarkerId).padStart(2, '0');
+
+            const tx = db.transaction(["markers"], "readwrite");
+            const store = tx.objectStore("markers");
+
+            store.delete(compositeId).onsuccess = function() {
+                const markerDiv = document.getElementById(`map-marker-${editingMarkerId}`);
+                if (markerDiv) markerDiv.remove();
+
+                markers = markers.filter(m => m.id !== editingMarkerId);
+                updateMarkersListUI();
+                updateNextLabelPreview();
+                showToast(`定位標籤 ${labelStr} 已刪除`);
+                closeDetailModal();
+            };
+        }
+
+        function clearAllMarkers() {
+            if (markers.length === 0) return;
+            if (!confirm("確定要刪除本專案下「所有的」定位點與相片嗎？此操作無法恢復。")) return;
+
+            const tx = db.transaction(["markers"], "readwrite");
+            const store = tx.objectStore("markers");
+
+            markers.forEach(m => {
+                const compositeId = `${currentProjectId}-${m.id}`;
+                store.delete(compositeId);
+
+                const markerDiv = document.getElementById(`map-marker-${m.id}`);
+                if (markerDiv) markerDiv.remove();
+            });
+
+            tx.oncomplete = function() {
+                markers = [];
+                updateMarkersListUI();
+                updateNextLabelPreview();
+                showToast("專案定位點已全部清空");
+            };
+        }
+
+        // --- 11. 一鍵導出 PDF 報告書 ---
+        function enterReportMode() {
+            if (!mapLoaded) return showToast("請先上傳平面圖紙以導出報告", "warning");
+
+            document.getElementById('report-project-name').innerText = currentProjectName;
+            document.getElementById('report-project-code').innerText = currentProjectCode;
+
+            const date = new Date();
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            document.getElementById('report-date-display').innerText = `報告日期：${year}/${month}/${day}`;
+
+            // 複製背景平面圖至預覽中
+            const floorplanImg = document.getElementById('report-floorplan-img');
+            floorplanImg.src = document.getElementById('floorplan-image').src;
+
+            // 清理並精準繪製定位標記
+            const reportLayer = document.getElementById('report-markers-layer');
+            reportLayer.innerHTML = "";
+
+            markers.forEach(m => {
+                const div = document.createElement('div');
+                div.className = "absolute transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center pointer-events-none";
+                div.style.left = `${m.x * 100}%`;
+                div.style.top = `${m.y * 100}%`;
+
+                div.innerHTML = `
+                    <div style="transform: rotate(${m.angle}deg);">
+                        <svg width="22" height="22" viewBox="0 0 100 100" class="fill-rose-500">
+                            <polygon points="50,5 25,45 42,45 42,95 58,95 58,45 75,45" />
+                        </svg>
+                    </div>
+                    <div class="absolute w-5.5 h-5.5 bg-rose-600 border border-white rounded-full flex items-center justify-center text-[7px] font-black text-white shadow-sm select-none truncate px-0.5">
+                        ${m.label}
+                    </div>
+                `;
+                reportLayer.appendChild(div);
+            });
+
+            // 生成相片記錄卡片
+            const reportPhotoGrid = document.getElementById('report-photo-grid');
+            reportPhotoGrid.innerHTML = "";
+
+            if (markers.length === 0) {
+                reportPhotoGrid.innerHTML = `
+                    <div class="col-span-full text-center py-10 text-gray-400 bg-gray-50 border border-dashed border-gray-200 rounded-lg">
+                        本專案目前未標記任何照片。
+                    </div>
+                `;
+            } else {
+                markers.forEach(m => {
+                    const block = document.createElement('div');
+                    block.className = "border border-gray-300 rounded-lg overflow-hidden flex flex-col bg-white shadow-sm break-inside-avoid";
+                    block.innerHTML = `
+                        <div class="aspect-[4/3] bg-gray-100 overflow-hidden relative">
+                            <img src="${m.photo || ''}" class="w-full h-full object-cover">
+                            <span class="absolute top-3 left-3 bg-rose-600 text-white font-black text-xs px-2.5 py-1 rounded-full border border-white shadow-md max-w-[150px] truncate">
+                                編號 ${m.label}
+                            </span>
+                        </div>
+                        <div class="p-4 border-t border-gray-200 bg-gray-50 flex-1">
+                            <div class="flex justify-between items-center mb-2 border-b border-gray-200 pb-1.5">
+                                <span class="text-xs font-bold text-gray-500 uppercase">拍照方向指示</span>
+                                <span class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                                    角度：<span class="font-mono bg-white border px-1.5 py-0.5 rounded text-[11px]">${Math.round(m.angle)}°</span>
+                                </span>
+                            </div>
+                            <div class="text-xs text-gray-700 min-h-[50px]">
+                                <span class="font-bold text-slate-800 block mb-1">查核備註描述：</span>
+                                <p class="leading-relaxed bg-white p-2.5 rounded border border-gray-200">${m.memo || '現場功能正常，無特殊瑕疵備註。'}</p>
+                            </div>
+                        </div>
+                    `;
+                    reportPhotoGrid.appendChild(block);
+                });
+            }
+
+            document.getElementById('report-view-container').classList.remove('hidden');
+        }
+
+        function exitReportMode() {
+            document.getElementById('report-view-container').classList.add('hidden');
+        }
+
+        // --- 12. 輔助工具 (Toast 訊息) ---
+        function showToast(message, type = "success") {
+            const existToast = document.getElementById('custom-toast');
+            if (existToast) existToast.remove();
+
+            const toast = document.createElement('div');
+            toast.id = "custom-toast";
+
+            let bgClass = "bg-slate-900 border-teal-500 text-teal-300";
+            let icon = "check-circle";
+            if (type === "warning") {
+                bgClass = "bg-slate-900 border-amber-500 text-amber-300";
+                icon = "alert-triangle";
+            } else if (type === "error") {
+                bgClass = "bg-slate-900 border-rose-500 text-rose-300";
+                icon = "x-circle";
+            }
+
+            toast.className = `fixed top-6 left-1/2 transform -translate-x-1/2 ${bgClass} border-2 px-4 py-3 rounded-xl shadow-2xl z-50 text-xs font-bold tracking-wide flex items-center space-x-2 transition-all duration-300 opacity-0 translate-y-[-20px]`;
+            toast.innerHTML = `
+                <i data-lucide="${icon}" class="w-4.5 h-4.5 flex-shrink-0"></i>
+                <span>${message}</span>
+            `;
+
+            document.body.appendChild(toast);
+            lucide.createIcons();
+
+            setTimeout(() => {
+                toast.classList.remove('opacity-0', 'translate-y-[-20px]');
+                toast.classList.add('opacity-100', 'translate-y-0');
+            }, 50);
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-[-20px]');
+                setTimeout(() => toast.remove(), 300);
+            }, 2500);
+        }
+    </script>
+</body>
+</html>
