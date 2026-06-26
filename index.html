@@ -183,8 +183,8 @@
                         <i data-lucide="file-image" class="w-4 h-4 text-slate-500 flex-shrink-0"></i>
                         <span id="filename-display" class="truncate font-mono">尚未載入平面圖</span>
                     </div>
-                    <button onclick="triggerFileInput()" class="text-teal-400 hover:text-teal-300 font-bold flex-shrink-0 flex items-center gap-1">
-                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>更換圖紙
+                    <button onclick="triggerReplaceCurrentSheet()" class="text-teal-400 hover:text-teal-300 font-bold flex-shrink-0 flex items-center gap-1">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>更換此圖頁底圖
                     </button>
                 </div>
             </div>
@@ -192,6 +192,14 @@
 
         <!-- 右側主畫布區域 (平面圖操作台) -->
         <div class="flex-1 relative overflow-hidden canvas-bg flex items-center justify-center">
+
+            <!-- 圖頁/樓層切換籤：一個專案可有多張平面圖，各自獨立標記與編號 -->
+            <div id="floorplan-tabs" class="absolute top-0 inset-x-0 z-[25] bg-slate-950/95 border-b border-slate-800 flex items-center gap-1.5 px-2 py-2 no-print">
+                <div id="floorplan-tabs-list" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 min-w-0"></div>
+                <button onclick="triggerFileInput()" class="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-400 flex items-center justify-center border border-slate-700" title="新增圖頁／樓層">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                </button>
+            </div>
 
             <!-- 遮罩：未載入平面圖時顯示 (內建拖曳 Drop Zone 感應) -->
             <div id="upload-overlay" class="absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center p-6 z-20 transition-all duration-300">
@@ -482,31 +490,8 @@
                     </div>
                 </div>
 
-                <!-- 報告第一部分：標記平面圖 -->
-                <div class="mb-10">
-                    <h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-4">一、 相片定位平面索引圖</h3>
-                    <div class="relative border border-gray-300 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center p-4">
-                        <!-- 自適應包裹容器，精準控制標籤覆蓋，完全不偏移 -->
-                        <div id="report-floorplan-wrapper" class="relative inline-block mx-auto">
-                            <img id="report-floorplan-img" src="" alt="平面圖" class="max-h-[420px] max-w-full block h-auto w-auto object-contain">
-                            <!-- 定位點渲染圖層 -->
-                            <div id="report-markers-layer" class="absolute inset-0 pointer-events-none"></div>
-                        </div>
-                    </div>
-                    <p class="text-[11px] text-gray-500 mt-2 text-center">※ 平面圖面上的紅色指針編號對應下方照片列表之拍照位置與方向。</p>
-                </div>
-
-                <!-- 分頁符號 -->
-                <div class="print-page-break"></div>
-
-                <!-- 報告第二部分：照片與定位說明對照表 -->
-                <div class="mt-8">
-                    <h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-6">二、 現場影像記錄明細表</h3>
-
-                    <div id="report-photo-grid" class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <!-- 動態渲染的照片卡片 -->
-                    </div>
-                </div>
+                <!-- 各圖頁(樓層)報告區塊：由 JS 依 floorplans 清單動態產生，每個圖頁各自一組「平面索引圖＋影像明細表」 -->
+                <div id="report-sections-container"></div>
             </div>
 
             <!-- 報告頁尾 -->
@@ -529,9 +514,14 @@
         let currentProjectCode = "PJ-001";
 
         let mapLoaded = false;
-        let markers = []; // 當前專案拍照點陣列 { id, label, x, y, angle, photo, memo }
+        let markers = []; // 當前圖頁(樓層)拍照點陣列 { id, label, x, y, angle, photo, memo }
         let currentMode = 'pan'; // 'pan' | 'add'
         let nextMarkerId = 1;
+
+        // 圖頁(樓層)管理：一個專案可以有多張平面圖，各自獨立標記與編號
+        let floorplans = []; // 當前專案下所有圖頁 { id, projectId, name, data, filename, numberingPrefix, numberingDigits, order }
+        let currentFloorplanId = null;
+        let pendingUploadMode = 'new'; // 'new' = 新增圖頁(可一次轉入多頁PDF) | 'replace' = 替換目前圖頁底圖
 
         // 暫存新增中的 Marker 位置與當前編輯狀態
         let pendingMarkerPos = { x: 0, y: 0 };
@@ -578,7 +568,7 @@
 
         // 初始化 IndexedDB 本機資料庫
         function initDatabase() {
-            const request = indexedDB.open("ArchitectPhotoMapperDB", 2);
+            const request = indexedDB.open("ArchitectPhotoMapperDB", 3);
 
             request.onerror = function(event) {
                 showToast("本機資料庫初始化失敗，部分資料可能無法暫存", "error");
@@ -592,16 +582,29 @@
 
             request.onupgradeneeded = function(event) {
                 const dbInstance = event.target.result;
+                const tx = event.target.transaction;
 
                 // 專案儲存
                 if (!dbInstance.objectStoreNames.contains("projects")) {
                     dbInstance.createObjectStore("projects", { keyPath: "id" });
                 }
 
+                // 圖頁(樓層)儲存：一個專案可有多張平面圖
+                if (!dbInstance.objectStoreNames.contains("floorplans")) {
+                    const fpStore = dbInstance.createObjectStore("floorplans", { keyPath: "id" });
+                    fpStore.createIndex("projectId", "projectId", { unique: false });
+                }
+
                 // 標記拍照點儲存
+                let markerStore;
                 if (!dbInstance.objectStoreNames.contains("markers")) {
-                    const markerStore = dbInstance.createObjectStore("markers", { keyPath: "compositeId" });
+                    markerStore = dbInstance.createObjectStore("markers", { keyPath: "compositeId" });
                     markerStore.createIndex("projectId", "projectId", { unique: false });
+                } else {
+                    markerStore = tx.objectStore("markers");
+                }
+                if (!markerStore.indexNames.contains("floorplanId")) {
+                    markerStore.createIndex("floorplanId", "floorplanId", { unique: false });
                 }
             };
         }
@@ -812,6 +815,9 @@
             if (!document.getElementById('project-modal').classList.contains('hidden')) {
                 document.getElementById('project-modal').classList.add('hidden');
             }
+            floorplans = [];
+            currentFloorplanId = null;
+            renderFloorplanTabs();
             resetCanvasState();
             loadCurrentProject();
         }
@@ -820,13 +826,24 @@
             if (id === 'default-project') return;
             if (!confirm("確定要刪除此專案嗎？這將會一併清空該專案下的平面圖與所有定位照片！")) return;
 
-            const tx = db.transaction(["projects", "markers"], "readwrite");
+            const tx = db.transaction(["projects", "floorplans", "markers"], "readwrite");
             tx.objectStore("projects").delete(id);
 
             const markerStore = tx.objectStore("markers");
-            const index = markerStore.index("projectId");
-            const request = index.openCursor(IDBKeyRange.only(id));
-            request.onsuccess = function(event) {
+            const markerIndex = markerStore.index("projectId");
+            const markerReq = markerIndex.openCursor(IDBKeyRange.only(id));
+            markerReq.onsuccess = function(event) {
+                const cursor = event.target.result;
+                if (cursor) {
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+
+            const fpStore = tx.objectStore("floorplans");
+            const fpIndex = fpStore.index("projectId");
+            const fpReq = fpIndex.openCursor(IDBKeyRange.only(id));
+            fpReq.onsuccess = function(event) {
                 const cursor = event.target.result;
                 if (cursor) {
                     cursor.delete();
@@ -852,7 +869,7 @@
             `;
         }
 
-        // 載入當前選中專案底圖、拍照點與自訂編碼設定
+        // 載入當前選中專案：先處理舊版資料搬移，再載入圖頁(樓層)清單
         function loadCurrentProject() {
             const transaction = db.transaction(["projects"], "readonly");
             const store = transaction.objectStore("projects");
@@ -862,46 +879,239 @@
                 if (proj) {
                     currentProjectName = proj.name || "未命名專案";
                     currentProjectCode = proj.code || "PJ-01";
-
-                    // 載入該專案的編碼設定，若無則設為預設
-                    document.getElementById('cfg-prefix').value = proj.numberingPrefix || "";
-                    document.getElementById('cfg-digits').value = proj.numberingDigits || "2";
-
                     updateHeaderDisplay();
-                    updateNextLabelPreview();
 
-                    if (proj.floorplanData) {
-                        document.getElementById('filename-display').innerText = proj.filename || "底圖.png";
-                        const img = document.getElementById('floorplan-image');
-                        img.src = proj.floorplanData;
-                        document.getElementById('upload-overlay').classList.add('hidden');
-                        mapLoaded = true;
-                    } else {
-                        document.getElementById('filename-display').innerText = "尚未載入平面圖";
-                        document.getElementById('upload-overlay').classList.remove('hidden');
-                        mapLoaded = false;
-                    }
+                    migrateLegacyFloorplanIfNeeded(proj, function() {
+                        loadFloorplansForProject(proj.lastFloorplanId || null);
+                    });
                 } else {
                     switchProject("default-project");
                 }
-
-                loadMarkersFromDatabase();
             };
         }
 
-        // 儲存編碼設定至 IndexedDB
+        // 將舊版「一個專案只有一張底圖」的資料，搬移成新版的圖頁(floorplans)結構
+        function migrateLegacyFloorplanIfNeeded(proj, callback) {
+            if (!proj.floorplanData) { callback(); return; }
+
+            const checkTx = db.transaction(["floorplans"], "readonly");
+            const checkIdx = checkTx.objectStore("floorplans").index("projectId");
+            checkIdx.getAll(IDBKeyRange.only(proj.id)).onsuccess = function(e) {
+                if (e.target.result.length > 0) { callback(); return; } // 已搬移過
+
+                const newFloorplanId = "fp-legacy-" + proj.id;
+                const sheet = {
+                    id: newFloorplanId,
+                    projectId: proj.id,
+                    name: "圖頁1",
+                    data: proj.floorplanData,
+                    filename: proj.filename || "底圖.png",
+                    numberingPrefix: proj.numberingPrefix || "",
+                    numberingDigits: proj.numberingDigits || "2",
+                    order: 0,
+                    createdAt: Date.now()
+                };
+
+                const wtx = db.transaction(["floorplans", "markers"], "readwrite");
+                wtx.objectStore("floorplans").add(sheet);
+
+                // 搬移舊版以 projectId 索引的標記到新版 floorplanId 結構
+                const markerIdx = wtx.objectStore("markers").index("projectId");
+                const toMigrate = [];
+                const markerReq = markerIdx.openCursor(IDBKeyRange.only(proj.id));
+                markerReq.onsuccess = function(ev) {
+                    const cursor = ev.target.result;
+                    if (cursor) {
+                        if (!cursor.value.floorplanId) toMigrate.push(cursor.value);
+                        cursor.continue();
+                    } else {
+                        toMigrate.forEach(m => {
+                            const oldCompositeId = m.compositeId;
+                            m.floorplanId = newFloorplanId;
+                            m.compositeId = `${newFloorplanId}-${m.id}`;
+                            wtx.objectStore("markers").delete(oldCompositeId);
+                            wtx.objectStore("markers").put(m);
+                        });
+                    }
+                };
+
+                wtx.oncomplete = function() { callback(); };
+            };
+        }
+
+        // 載入當前專案下所有圖頁(樓層)，並切換到上次查看的圖頁(或第一張)
+        function loadFloorplansForProject(preferredFloorplanId) {
+            const tx = db.transaction(["floorplans"], "readonly");
+            const idx = tx.objectStore("floorplans").index("projectId");
+            idx.getAll(IDBKeyRange.only(currentProjectId)).onsuccess = function(e) {
+                floorplans = e.target.result.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+                if (floorplans.length === 0) {
+                    currentFloorplanId = null;
+                    renderFloorplanTabs();
+                    resetCanvasState();
+                    document.getElementById('filename-display').innerText = "尚未載入平面圖";
+                    document.getElementById('upload-overlay').classList.remove('hidden');
+                    updateMarkersListUI();
+                    return;
+                }
+
+                const targetId = (preferredFloorplanId && floorplans.find(f => f.id === preferredFloorplanId))
+                    ? preferredFloorplanId
+                    : floorplans[0].id;
+                switchFloorplan(targetId);
+            };
+        }
+
+        // 切換到指定圖頁(樓層)：重置畫布、載入該圖頁底圖、編碼設定與標記
+        function switchFloorplan(id) {
+            const fp = floorplans.find(f => f.id === id);
+            if (!fp) return;
+            currentFloorplanId = id;
+
+            // 記住此專案最後查看的圖頁，下次開啟時自動回到這一頁
+            const ptx = db.transaction(["projects"], "readwrite");
+            const pstore = ptx.objectStore("projects");
+            pstore.get(currentProjectId).onsuccess = function(e) {
+                const proj = e.target.result;
+                if (proj) {
+                    proj.lastFloorplanId = id;
+                    pstore.put(proj);
+                }
+            };
+
+            document.getElementById('cfg-prefix').value = fp.numberingPrefix || "";
+            document.getElementById('cfg-digits').value = fp.numberingDigits || "2";
+
+            resetCanvasState();
+
+            if (fp.data) {
+                document.getElementById('filename-display').innerText = fp.filename || fp.name;
+                document.getElementById('floorplan-image').src = fp.data;
+                document.getElementById('upload-overlay').classList.add('hidden');
+                mapLoaded = true;
+            } else {
+                document.getElementById('filename-display').innerText = "尚未載入平面圖";
+                document.getElementById('upload-overlay').classList.remove('hidden');
+                mapLoaded = false;
+            }
+
+            renderFloorplanTabs();
+            loadMarkersFromDatabase();
+            updateNextLabelPreview();
+        }
+
+        // 產生圖頁(樓層)切換籤的 UI
+        function renderFloorplanTabs() {
+            const list = document.getElementById('floorplan-tabs-list');
+            if (!list) return;
+            list.innerHTML = "";
+
+            floorplans.forEach(fp => {
+                const isActive = fp.id === currentFloorplanId;
+                const btn = document.createElement('button');
+                btn.className = `flex-shrink-0 flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg text-xs font-bold border transition whitespace-nowrap ${
+                    isActive
+                    ? 'bg-teal-600/20 border-teal-500/50 text-teal-300'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                }`;
+                btn.title = "點兩下可重新命名（例如：1F、2F、屋頂層）";
+
+                const nameSpan = document.createElement('span');
+                nameSpan.innerText = fp.name;
+                btn.appendChild(nameSpan);
+
+                if (floorplans.length > 1) {
+                    const delSpan = document.createElement('span');
+                    delSpan.className = "ml-0.5 text-slate-500 hover:text-rose-400 p-0.5";
+                    delSpan.title = "刪除此圖頁";
+                    delSpan.innerHTML = `<i data-lucide="x" class="w-3 h-3"></i>`;
+                    delSpan.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        deleteFloorplanSheet(fp.id);
+                    });
+                    btn.appendChild(delSpan);
+                }
+
+                btn.addEventListener('click', () => switchFloorplan(fp.id));
+                btn.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    renameFloorplan(fp.id);
+                });
+
+                list.appendChild(btn);
+            });
+
+            lucide.createIcons();
+        }
+
+        // 重新命名圖頁(樓層)
+        function renameFloorplan(id) {
+            const fp = floorplans.find(f => f.id === id);
+            if (!fp) return;
+
+            const newName = prompt("輸入此圖頁的新名稱（例如：1F、2F、屋頂層）：", fp.name);
+            if (!newName || !newName.trim()) return;
+
+            fp.name = newName.trim();
+            const tx = db.transaction(["floorplans"], "readwrite");
+            tx.objectStore("floorplans").put(fp);
+
+            renderFloorplanTabs();
+            if (id === currentFloorplanId) {
+                document.getElementById('filename-display').innerText = fp.filename || fp.name;
+            }
+        }
+
+        // 刪除圖頁(樓層)：會一併刪除該圖頁下所有拍照標記
+        function deleteFloorplanSheet(id) {
+            if (floorplans.length <= 1) return showToast("至少需保留一個圖頁", "warning");
+            if (!confirm("確定要刪除這個圖頁嗎？此圖頁下所有拍照標記都會一併刪除，且無法復原。")) return;
+
+            const tx = db.transaction(["floorplans", "markers"], "readwrite");
+            tx.objectStore("floorplans").delete(id);
+
+            const markerIdx = tx.objectStore("markers").index("floorplanId");
+            const req = markerIdx.openCursor(IDBKeyRange.only(id));
+            req.onsuccess = function(e) {
+                const cursor = e.target.result;
+                if (cursor) {
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+
+            tx.oncomplete = function() {
+                floorplans = floorplans.filter(f => f.id !== id);
+                showToast("圖頁已刪除");
+                if (currentFloorplanId === id) {
+                    switchFloorplan(floorplans[0].id);
+                } else {
+                    renderFloorplanTabs();
+                }
+            };
+        }
+
+        // 儲存編碼設定至目前圖頁(樓層)
         function saveNumberingConfig() {
+            if (!currentFloorplanId) return;
             const prefix = document.getElementById('cfg-prefix').value;
             const digits = document.getElementById('cfg-digits').value;
 
-            const transaction = db.transaction(["projects"], "readwrite");
-            const store = transaction.objectStore("projects");
-            store.get(currentProjectId).onsuccess = function(event) {
-                const project = event.target.result;
-                if (project) {
-                    project.numberingPrefix = prefix;
-                    project.numberingDigits = digits;
-                    store.put(project);
+            const transaction = db.transaction(["floorplans"], "readwrite");
+            const store = transaction.objectStore("floorplans");
+            store.get(currentFloorplanId).onsuccess = function(event) {
+                const fp = event.target.result;
+                if (fp) {
+                    fp.numberingPrefix = prefix;
+                    fp.numberingDigits = digits;
+                    store.put(fp);
+
+                    const local = floorplans.find(f => f.id === currentFloorplanId);
+                    if (local) {
+                        local.numberingPrefix = prefix;
+                        local.numberingDigits = digits;
+                    }
                 }
             };
         }
@@ -934,7 +1144,17 @@
         }
 
         // --- 4. 檔案處理 (PDF 轉 Canvas 與底圖載入) ---
+
+        // 開啟檔案選擇器以「新增圖頁」(多頁PDF會一次轉出多張圖頁，例如各樓層各一頁)
         function triggerFileInput() {
+            pendingUploadMode = 'new';
+            document.getElementById('map-file-input').click();
+        }
+
+        // 開啟檔案選擇器以「替換目前圖頁的底圖」(保留此圖頁既有的拍照標記)
+        function triggerReplaceCurrentSheet() {
+            if (!currentFloorplanId) return triggerFileInput();
+            pendingUploadMode = 'replace';
             document.getElementById('map-file-input').click();
         }
 
@@ -943,6 +1163,7 @@
             if (file) {
                 processSelectedFile(file);
             }
+            event.target.value = ""; // 允許重複選同一檔案也能觸發 onchange
         }
 
         // 核心檔案載入分配器 (支援對話選擇與拖曳置放)
@@ -950,30 +1171,36 @@
             const loading = document.getElementById('loading-overlay');
             loading.classList.remove('hidden');
 
-            document.getElementById('filename-display').innerText = file.name;
-
             if (file.type === "application/pdf") {
                 const fileReader = new FileReader();
                 fileReader.onload = function() {
                     const typedarray = new Uint8Array(this.result);
 
                     pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
-                        pdf.getPage(1).then(function(page) {
-                            const viewport = page.getViewport({ scale: 2.0 });
-                            const canvas = document.createElement('canvas');
-                            const context = canvas.getContext('2d');
-                            canvas.height = viewport.height;
-                            canvas.width = viewport.width;
+                        // 替換模式只需要第一頁；新增模式則把每一頁都轉成一個獨立圖頁(例如各樓層)
+                        const totalPages = (pendingUploadMode === 'replace') ? 1 : pdf.numPages;
+                        const pageImages = [];
 
-                            const renderContext = {
-                                canvasContext: context,
-                                viewport: viewport
-                            };
+                        function renderPage(pageNum) {
+                            return pdf.getPage(pageNum).then(function(page) {
+                                const viewport = page.getViewport({ scale: 2.0 });
+                                const canvas = document.createElement('canvas');
+                                const context = canvas.getContext('2d');
+                                canvas.height = viewport.height;
+                                canvas.width = viewport.width;
 
-                            page.render(renderContext).promise.then(function() {
-                                const base64Image = canvas.toDataURL("image/jpeg", 0.8);
-                                saveFloorplanToDb(base64Image, file.name);
+                                return page.render({ canvasContext: context, viewport: viewport }).promise.then(function() {
+                                    pageImages.push(canvas.toDataURL("image/jpeg", 0.8));
+                                });
                             });
+                        }
+
+                        let chain = Promise.resolve();
+                        for (let i = 1; i <= totalPages; i++) {
+                            chain = chain.then(() => renderPage(i));
+                        }
+                        chain.then(() => {
+                            commitFloorplanUpload(pageImages, file.name);
                         });
                     }).catch(err => {
                         loading.classList.add('hidden');
@@ -1014,31 +1241,71 @@
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    const compressedBase64 = canvas.toDataURL("image/jpeg", 0.85);
-                    saveFloorplanToDb(compressedBase64, filename);
+                    commitFloorplanUpload([canvas.toDataURL("image/jpeg", 0.85)], filename);
                 } else {
-                    saveFloorplanToDb(base64Str, filename);
+                    commitFloorplanUpload([base64Str], filename);
                 }
             };
             img.src = base64Str;
         }
 
-        function saveFloorplanToDb(base64Data, filename) {
-            const transaction = db.transaction(["projects"], "readwrite");
-            const store = transaction.objectStore("projects");
+        // 依照目前模式，將轉出的圖片寫入資料庫：'replace' 替換目前圖頁底圖／'new' 新增一或多個圖頁
+        function commitFloorplanUpload(pageImages, filename) {
+            const loading = document.getElementById('loading-overlay');
+            const mode = pendingUploadMode;
+            pendingUploadMode = 'new'; // 用完即重置，避免影響下一次操作
 
-            store.get(currentProjectId).onsuccess = function(event) {
-                const project = event.target.result || { id: currentProjectId, name: currentProjectName, code: currentProjectCode };
-                project.floorplanData = base64Data;
-                project.filename = filename;
+            if (mode === 'replace' && currentFloorplanId) {
+                const tx = db.transaction(["floorplans"], "readwrite");
+                const store = tx.objectStore("floorplans");
+                store.get(currentFloorplanId).onsuccess = function(event) {
+                    const fp = event.target.result;
+                    if (!fp) { loading.classList.add('hidden'); return; }
 
-                store.put(project).onsuccess = function() {
-                    document.getElementById('floorplan-image').src = base64Data;
-                    document.getElementById('upload-overlay').classList.add('hidden');
-                    document.getElementById('loading-overlay').classList.add('hidden');
-                    mapLoaded = true;
-                    showToast("底圖載入成功！");
+                    fp.data = pageImages[0];
+                    fp.filename = filename;
+
+                    store.put(fp).onsuccess = function() {
+                        const local = floorplans.find(f => f.id === currentFloorplanId);
+                        if (local) {
+                            local.data = fp.data;
+                            local.filename = fp.filename;
+                        }
+
+                        document.getElementById('floorplan-image').src = fp.data;
+                        document.getElementById('filename-display').innerText = fp.filename;
+                        document.getElementById('upload-overlay').classList.add('hidden');
+                        loading.classList.add('hidden');
+                        mapLoaded = true;
+                        showToast("底圖已更新！");
+                    };
                 };
+                return;
+            }
+
+            // 新增模式：每一頁建立一個新圖頁(樓層)
+            const existingCount = floorplans.length;
+            const newSheets = pageImages.map((data, idx) => ({
+                id: `fp-${Date.now()}-${idx}`,
+                projectId: currentProjectId,
+                name: pageImages.length > 1 ? `圖頁${existingCount + idx + 1}` : `圖頁${existingCount + 1}`,
+                data: data,
+                filename: pageImages.length > 1 ? `${filename} (第${idx + 1}頁)` : filename,
+                numberingPrefix: "",
+                numberingDigits: "2",
+                order: existingCount + idx,
+                createdAt: Date.now()
+            }));
+
+            const tx = db.transaction(["floorplans"], "readwrite");
+            const store = tx.objectStore("floorplans");
+            newSheets.forEach(s => store.add(s));
+
+            tx.oncomplete = function() {
+                floorplans = floorplans.concat(newSheets).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                loading.classList.add('hidden');
+                switchFloorplan(newSheets[0].id);
+                showToast(pageImages.length > 1 ? `已新增 ${pageImages.length} 張圖頁(每頁PDF轉出一張)` : "圖頁新增成功！");
             };
         }
 
@@ -1052,8 +1319,11 @@
 
             if (!img.complete || img.naturalWidth === 0) return;
 
+            const tabBarEl = document.getElementById('floorplan-tabs');
+            const tabBarHeight = tabBarEl ? tabBarEl.offsetHeight : 0;
+
             const vWidth = viewport.clientWidth;
-            const vHeight = viewport.clientHeight;
+            const vHeight = viewport.clientHeight - tabBarHeight;
             const imgWidth = img.naturalWidth;
             const imgHeight = img.naturalHeight;
 
@@ -1063,7 +1333,7 @@
             if (scale > 2) scale = 1.5;
 
             panX = (vWidth - (imgWidth * scale)) / 2;
-            panY = (vHeight - (imgHeight * scale)) / 2;
+            panY = tabBarHeight + (vHeight - (imgHeight * scale)) / 2;
 
             updateTransform();
         }
@@ -1396,7 +1666,8 @@
             const labelStr = formatLabel(nextId);
 
             const newMarker = {
-                compositeId: `${currentProjectId}-${nextId}`,
+                compositeId: `${currentFloorplanId}-${nextId}`,
+                floorplanId: currentFloorplanId,
                 projectId: currentProjectId,
                 id: nextId,
                 label: labelStr,
@@ -1422,7 +1693,9 @@
         }
 
         function updateExistingMarkerPhoto(id, photoData) {
-            const compositeId = `${currentProjectId}-${id}`;
+            const existing = markers.find(m => m.id === id);
+            if (!existing) { editingMarkerId = null; return; }
+            const compositeId = existing.compositeId;
             const tx = db.transaction(["markers"], "readwrite");
             const store = tx.objectStore("markers");
 
@@ -1450,11 +1723,11 @@
             markers = [];
             document.getElementById('markers-layer').innerHTML = "";
 
-            if (!db) return;
+            if (!db || !currentFloorplanId) { updateMarkersListUI(); return; }
             const transaction = db.transaction(["markers"], "readonly");
             const store = transaction.objectStore("markers");
-            const index = store.index("projectId");
-            const request = index.getAll(IDBKeyRange.only(currentProjectId));
+            const index = store.index("floorplanId");
+            const request = index.getAll(IDBKeyRange.only(currentFloorplanId));
 
             request.onsuccess = function() {
                 const results = request.result;
@@ -1630,7 +1903,9 @@
         function saveDetailAndClose() {
             if (editingMarkerId === null) return;
 
-            const compositeId = `${currentProjectId}-${editingMarkerId}`;
+            const existing = markers.find(m => m.id === editingMarkerId);
+            if (!existing) return;
+            const compositeId = existing.compositeId;
             const memoText = document.getElementById('detail-memo').value.trim();
             const newLabelText = document.getElementById('detail-label').value.trim();
 
@@ -1675,8 +1950,10 @@
             if (editingMarkerId === null) return;
             if (!confirm("確定要刪除這個定位拍照點嗎？此動作將無法還原。")) return;
 
-            const compositeId = `${currentProjectId}-${editingMarkerId}`;
-            const labelStr = String(editingMarkerId).padStart(2, '0');
+            const existing = markers.find(m => m.id === editingMarkerId);
+            if (!existing) return;
+            const compositeId = existing.compositeId;
+            const labelStr = existing.label || String(editingMarkerId).padStart(2, '0');
 
             const tx = db.transaction(["markers"], "readwrite");
             const store = tx.objectStore("markers");
@@ -1701,8 +1978,7 @@
             const store = tx.objectStore("markers");
 
             markers.forEach(m => {
-                const compositeId = `${currentProjectId}-${m.id}`;
-                store.delete(compositeId);
+                store.delete(m.compositeId);
 
                 const markerDiv = document.getElementById(`map-marker-${m.id}`);
                 if (markerDiv) markerDiv.remove();
@@ -1716,33 +1992,46 @@
             };
         }
 
-        // --- 11. 一鍵導出 PDF 報告書 ---
-        function enterReportMode() {
-            if (!mapLoaded) return showToast("請先上傳平面圖紙以導出報告", "warning");
+        // --- 11. 一鍵導出 PDF 報告書 (依專案下每一個圖頁/樓層各自產生一組索引圖＋影像明細表) ---
 
-            document.getElementById('report-project-name').innerText = currentProjectName;
-            document.getElementById('report-project-code').innerText = currentProjectCode;
+        // 從資料庫取得指定圖頁(樓層)下的所有拍照標記
+        function getMarkersForFloorplan(floorplanId) {
+            return new Promise((resolve) => {
+                const tx = db.transaction(["markers"], "readonly");
+                const idx = tx.objectStore("markers").index("floorplanId");
+                idx.getAll(IDBKeyRange.only(floorplanId)).onsuccess = function(e) {
+                    resolve(e.target.result.sort((a, b) => a.id - b.id));
+                };
+            });
+        }
 
-            const date = new Date();
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            document.getElementById('report-date-display').innerText = `報告日期：${year}/${month}/${day}`;
+        // 建立單一圖頁(樓層)的報告區塊 DOM（平面索引圖 + 影像記錄明細表）
+        function buildReportSection(fp, markersForFp, sectionIndex) {
+            const section = document.createElement('div');
+            if (sectionIndex > 1) section.classList.add('print-page-break');
 
-            // 複製背景平面圖至預覽中
-            const floorplanImg = document.getElementById('report-floorplan-img');
-            floorplanImg.src = document.getElementById('floorplan-image').src;
+            const zhNum = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][sectionIndex - 1] || String(sectionIndex);
 
-            // 清理並精準繪製定位標記
-            const reportLayer = document.getElementById('report-markers-layer');
-            reportLayer.innerHTML = "";
+            const mapBlock = document.createElement('div');
+            mapBlock.className = "mb-10 mt-2";
+            mapBlock.innerHTML = `
+                <h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-1">${zhNum}、${fp.name} － 相片定位平面索引圖</h3>
+                <p class="text-xs text-gray-400 mb-4">圖頁：${fp.name}（共 ${markersForFp.length} 個拍照標記點）</p>
+                <div class="relative border border-gray-300 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center p-4">
+                    <div class="relative inline-block mx-auto report-floorplan-wrapper">
+                        <img src="${fp.data || ''}" alt="${fp.name}" class="max-h-[420px] max-w-full block h-auto w-auto object-contain">
+                        <div class="absolute inset-0 pointer-events-none report-markers-layer"></div>
+                    </div>
+                </div>
+                <p class="text-[11px] text-gray-500 mt-2 text-center">※ 平面圖面上的紅色指針編號對應下方照片列表之拍照位置與方向。</p>
+            `;
 
-            markers.forEach(m => {
+            const markersLayer = mapBlock.querySelector('.report-markers-layer');
+            markersForFp.forEach(m => {
                 const div = document.createElement('div');
                 div.className = "absolute transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center pointer-events-none";
                 div.style.left = `${m.x * 100}%`;
                 div.style.top = `${m.y * 100}%`;
-
                 div.innerHTML = `
                     <div style="transform: rotate(${m.angle}deg);">
                         <svg width="22" height="22" viewBox="0 0 100 100" class="fill-rose-500">
@@ -1753,21 +2042,25 @@
                         ${m.label}
                     </div>
                 `;
-                reportLayer.appendChild(div);
+                markersLayer.appendChild(div);
             });
 
-            // 生成相片記錄卡片
-            const reportPhotoGrid = document.getElementById('report-photo-grid');
-            reportPhotoGrid.innerHTML = "";
+            const gridBlock = document.createElement('div');
+            gridBlock.className = "mt-8 mb-4";
+            const zhNum2 = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][sectionIndex - 1] || String(sectionIndex);
+            gridBlock.innerHTML = `<h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-6">${zhNum2}-2、${fp.name} － 現場影像記錄明細表</h3>`;
 
-            if (markers.length === 0) {
-                reportPhotoGrid.innerHTML = `
+            const grid = document.createElement('div');
+            grid.className = "grid grid-cols-1 md:grid-cols-2 gap-8";
+
+            if (markersForFp.length === 0) {
+                grid.innerHTML = `
                     <div class="col-span-full text-center py-10 text-gray-400 bg-gray-50 border border-dashed border-gray-200 rounded-lg">
-                        本專案目前未標記任何照片。
+                        此圖頁目前未標記任何照片。
                     </div>
                 `;
             } else {
-                markers.forEach(m => {
+                markersForFp.forEach(m => {
                     const block = document.createElement('div');
                     block.className = "border border-gray-300 rounded-lg overflow-hidden flex flex-col bg-white shadow-sm break-inside-avoid";
                     block.innerHTML = `
@@ -1790,8 +2083,36 @@
                             </div>
                         </div>
                     `;
-                    reportPhotoGrid.appendChild(block);
+                    grid.appendChild(block);
                 });
+            }
+            gridBlock.appendChild(grid);
+
+            section.appendChild(mapBlock);
+            section.appendChild(gridBlock);
+            return section;
+        }
+
+        async function enterReportMode() {
+            if (floorplans.length === 0) return showToast("請先上傳至少一張平面圖紙以導出報告", "warning");
+
+            document.getElementById('report-project-name').innerText = currentProjectName;
+            document.getElementById('report-project-code').innerText = currentProjectCode;
+
+            const date = new Date();
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            document.getElementById('report-date-display').innerText = `報告日期：${year}/${month}/${day}`;
+
+            const container = document.getElementById('report-sections-container');
+            container.innerHTML = "";
+
+            let sectionIndex = 0;
+            for (const fp of floorplans) {
+                sectionIndex++;
+                const markersForFp = await getMarkersForFloorplan(fp.id);
+                container.appendChild(buildReportSection(fp, markersForFp, sectionIndex));
             }
 
             document.getElementById('report-view-container').classList.remove('hidden');
