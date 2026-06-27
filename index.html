@@ -208,7 +208,7 @@
                         <i data-lucide="upload-cloud" class="w-8 h-8"></i>
                     </div>
                     <h2 class="text-lg font-bold text-white mb-2">載入建築平面圖</h2>
-                    <p class="text-sm text-slate-400 mb-6 leading-relaxed">請上傳該樓層的 <span class="text-teal-400 font-semibold">PDF 圖紙</span>、CAD 匯出的 <span class="text-teal-400 font-semibold">JPG/PNG 圖片</span>。我們將在圖面上協助您標記與關聯照片。</p>
+                    <p class="text-sm text-slate-400 mb-6 leading-relaxed">請上傳該樓層的 <span class="text-teal-400 font-semibold">PDF 圖紙</span>、CAD 匯出的 <span class="text-teal-400 font-semibold">JPG/PNG 圖片</span>。可一次選取多個檔案，或上傳多頁 PDF，每頁／每個檔案都會自動變成一個獨立圖頁。</p>
 
                     <div class="space-y-4">
                         <button onclick="triggerFileInput()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-teal-950/50">
@@ -240,7 +240,7 @@
             </div>
 
             <!-- 隱藏的 Input 檔案選擇器 -->
-            <input type="file" id="map-file-input" accept="application/pdf, image/*" class="hidden" onchange="handleFileSelect(event)">
+            <input type="file" id="map-file-input" accept="application/pdf, image/*" multiple class="hidden" onchange="handleFileSelect(event)">
 
             <!-- 隱藏的相機拍照 Input -->
             <input type="file" id="camera-file-input" accept="image/*" capture="camera" class="hidden" onchange="handleCameraCapture(event)">
@@ -637,12 +637,12 @@
                 }, false);
             });
 
-            // 處理置放後的檔案上傳
+            // 處理置放後的檔案上傳 (支援一次拖入多個檔案)
             uploadOverlay.addEventListener('drop', (e) => {
-                const dt = e.dataTransfer;
-                const files = dt.files;
+                const files = e.dataTransfer.files;
                 if (files && files.length > 0) {
-                    processSelectedFile(files[0]);
+                    pendingUploadMode = 'new';
+                    processFileBatch(Array.from(files));
                 }
             }, false);
         }
@@ -1159,17 +1159,41 @@
         }
 
         function handleFileSelect(event) {
-            const file = event.target.files[0];
-            if (file) {
-                processSelectedFile(file);
-            }
+            const files = Array.from(event.target.files || []);
             event.target.value = ""; // 允許重複選同一檔案也能觸發 onchange
+            if (files.length === 0) return;
+            processFileBatch(files);
         }
 
-        // 核心檔案載入分配器 (支援對話選擇與拖曳置放)
-        function processSelectedFile(file) {
+        // 依序處理一批檔案 (支援一次選取/拖曳多個 PDF 或圖片，每個檔案各自轉成圖頁)
+        function processFileBatch(files) {
             const loading = document.getElementById('loading-overlay');
             loading.classList.remove('hidden');
+
+            // 替換模式只套用在目前這一個圖頁，多選時僅取第一個檔案
+            if (pendingUploadMode === 'replace') {
+                if (files.length > 1) showToast("替換底圖僅會使用第一個檔案", "warning");
+                processSelectedFile(files[0], () => loading.classList.add('hidden'), true);
+                return;
+            }
+
+            let index = 0;
+            function next() {
+                if (index >= files.length) {
+                    loading.classList.add('hidden');
+                    return;
+                }
+                const isLast = index === files.length - 1;
+                const file = files[index++];
+                processSelectedFile(file, next, isLast);
+            }
+            next();
+        }
+
+        // 核心檔案載入分配器 (支援對話選擇與拖曳置放)：處理單一檔案，完成後呼叫 onDone 以接續處理批次中的下一個檔案
+        function processSelectedFile(file, onDone, shouldSwitch) {
+            onDone = onDone || function () {};
+            if (shouldSwitch === undefined) shouldSwitch = true;
 
             if (file.type === "application/pdf") {
                 const fileReader = new FileReader();
@@ -1200,27 +1224,27 @@
                             chain = chain.then(() => renderPage(i));
                         }
                         chain.then(() => {
-                            commitFloorplanUpload(pageImages, file.name);
+                            commitFloorplanUpload(pageImages, file.name, shouldSwitch, onDone);
                         });
                     }).catch(err => {
-                        loading.classList.add('hidden');
                         showToast("無法解析 PDF 檔案，請確保檔案未損壞", "error");
+                        onDone();
                     });
                 };
                 fileReader.readAsArrayBuffer(file);
             } else if (file.type.startsWith("image/")) {
                 const reader = new FileReader();
                 reader.onload = function(e) {
-                    compressFloorplanImage(e.target.result, file.name);
+                    compressFloorplanImage(e.target.result, file.name, shouldSwitch, onDone);
                 };
                 reader.readAsDataURL(file);
             } else {
-                loading.classList.add('hidden');
                 showToast("不支援的檔案格式，請上傳 PDF 或 圖片", "warning");
+                onDone();
             }
         }
 
-        function compressFloorplanImage(base64Str, filename) {
+        function compressFloorplanImage(base64Str, filename, shouldSwitch, onDone) {
             const img = new Image();
             img.onload = function() {
                 const maxDim = 3500;
@@ -1241,17 +1265,17 @@
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    commitFloorplanUpload([canvas.toDataURL("image/jpeg", 0.85)], filename);
+                    commitFloorplanUpload([canvas.toDataURL("image/jpeg", 0.85)], filename, shouldSwitch, onDone);
                 } else {
-                    commitFloorplanUpload([base64Str], filename);
+                    commitFloorplanUpload([base64Str], filename, shouldSwitch, onDone);
                 }
             };
             img.src = base64Str;
         }
 
         // 依照目前模式，將轉出的圖片寫入資料庫：'replace' 替換目前圖頁底圖／'new' 新增一或多個圖頁
-        function commitFloorplanUpload(pageImages, filename) {
-            const loading = document.getElementById('loading-overlay');
+        function commitFloorplanUpload(pageImages, filename, shouldSwitch, onDone) {
+            onDone = onDone || function () {};
             const mode = pendingUploadMode;
             pendingUploadMode = 'new'; // 用完即重置，避免影響下一次操作
 
@@ -1260,7 +1284,7 @@
                 const store = tx.objectStore("floorplans");
                 store.get(currentFloorplanId).onsuccess = function(event) {
                     const fp = event.target.result;
-                    if (!fp) { loading.classList.add('hidden'); return; }
+                    if (!fp) { onDone(); return; }
 
                     fp.data = pageImages[0];
                     fp.filename = filename;
@@ -1275,9 +1299,9 @@
                         document.getElementById('floorplan-image').src = fp.data;
                         document.getElementById('filename-display').innerText = fp.filename;
                         document.getElementById('upload-overlay').classList.add('hidden');
-                        loading.classList.add('hidden');
                         mapLoaded = true;
                         showToast("底圖已更新！");
+                        onDone();
                     };
                 };
                 return;
@@ -1286,7 +1310,7 @@
             // 新增模式：每一頁建立一個新圖頁(樓層)
             const existingCount = floorplans.length;
             const newSheets = pageImages.map((data, idx) => ({
-                id: `fp-${Date.now()}-${idx}`,
+                id: `fp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${idx}`,
                 projectId: currentProjectId,
                 name: pageImages.length > 1 ? `圖頁${existingCount + idx + 1}` : `圖頁${existingCount + 1}`,
                 data: data,
@@ -1303,9 +1327,13 @@
 
             tx.oncomplete = function() {
                 floorplans = floorplans.concat(newSheets).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                loading.classList.add('hidden');
-                switchFloorplan(newSheets[0].id);
+                if (shouldSwitch) {
+                    switchFloorplan(newSheets[0].id);
+                } else {
+                    renderFloorplanTabs();
+                }
                 showToast(pageImages.length > 1 ? `已新增 ${pageImages.length} 張圖頁(每頁PDF轉出一張)` : "圖頁新增成功！");
+                onDone();
             };
         }
 
