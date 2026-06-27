@@ -26,6 +26,8 @@
     </script>
     <!-- Google Identity Services (用於 Google 登入 + 讀取 Google Drive 資料夾圖檔) -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <!-- Google API Client (用於 Google Picker：視覺化選擇 Drive 資料夾) -->
+    <script src="https://apis.google.com/js/api.js"></script>
     <style>
         /* 隱藏滾動條但保持功能 */
         .no-scrollbar::-webkit-scrollbar {
@@ -474,11 +476,22 @@
                     <p class="text-xs text-emerald-400 mb-3 flex items-center gap-1">
                         <i data-lucide="check-circle" class="w-3.5 h-3.5"></i>已登入 Google
                     </p>
+
+                    <button onclick="openDrivePicker()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-2.5 rounded-xl transition flex items-center justify-center gap-1.5">
+                        <i data-lucide="folder-open" class="w-4 h-4"></i>選擇 Drive 資料夾
+                    </button>
+
+                    <div class="flex items-center gap-2 my-4">
+                        <span class="flex-1 border-t border-slate-800"></span>
+                        <span class="text-[10px] text-slate-500">或手動貼連結</span>
+                        <span class="flex-1 border-t border-slate-800"></span>
+                    </div>
+
                     <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5">貼上此專案要連結的 Drive 資料夾連結</label>
                     <input type="text" id="drive-folder-input" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono" placeholder="https://drive.google.com/drive/folders/xxxxxxxx">
-                    <p class="text-[11px] text-slate-500 mt-1.5">在 Google Drive 開啟資料夾，複製網址列連結貼到這裡即可，兩台裝置要連結同一個資料夾才能互通。</p>
-                    <button onclick="saveDriveFolderLink()" class="w-full mt-4 bg-teal-600 hover:bg-teal-500 text-white font-bold py-2.5 rounded-xl transition">
-                        儲存並讀取資料夾內容
+                    <p class="text-[11px] text-slate-500 mt-1.5">兩台裝置要連結同一個資料夾才能互通。</p>
+                    <button onclick="saveDriveFolderLink()" class="w-full mt-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl transition border border-slate-700">
+                        儲存連結
                     </button>
                     <p id="drive-folder-error" class="hidden text-xs text-rose-400 mt-3"></p>
                 </div>
@@ -1469,7 +1482,11 @@
                 showDriveError('drive-folder-error', "無法解析資料夾連結，請確認貼上的是完整的 Drive 資料夾網址");
                 return;
             }
+            setProjectDriveFolder(folderId);
+        }
 
+        // 把指定的 Drive 資料夾 ID 存到目前專案上 (供「手動貼連結」與「Picker 選擇」共用)
+        function setProjectDriveFolder(folderId) {
             currentProjectDriveFolderId = folderId;
             const tx = db.transaction(["projects"], "readwrite");
             const store = tx.objectStore("projects");
@@ -1488,6 +1505,52 @@
             currentProjectDriveFolderId = null;
             document.getElementById('drive-folder-input').value = "";
             updateDriveModalStep();
+        }
+
+        // --- Google Picker：視覺化選擇 Drive 資料夾，取代手動貼連結 ---
+
+        // TODO: 換成你在 Google Cloud Console 建立的「API 金鑰」(限制成只能用在 Picker API + 本網域)
+        const GOOGLE_PICKER_API_KEY = "請替換成你的-PICKER-API-KEY";
+
+        let googlePickerLoaded = false;
+
+        function openDrivePicker() {
+            if (GOOGLE_PICKER_API_KEY.indexOf('請替換成') === 0) {
+                showDriveError('drive-folder-error', "尚未設定 Google Picker API Key，請先用下方手動貼連結的方式");
+                return;
+            }
+            if (!googleAccessToken) return;
+
+            if (googlePickerLoaded) {
+                showDrivePicker();
+            } else {
+                gapi.load('picker', () => {
+                    googlePickerLoaded = true;
+                    showDrivePicker();
+                });
+            }
+        }
+
+        function showDrivePicker() {
+            const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+                .setSelectFolderEnabled(true)
+                .setIncludeFolders(true)
+                .setMimeTypes('application/vnd.google-apps.folder');
+
+            const picker = new google.picker.PickerBuilder()
+                .addView(view)
+                .setOAuthToken(googleAccessToken)
+                .setDeveloperKey(GOOGLE_PICKER_API_KEY)
+                .setCallback(onDrivePickerResult)
+                .build();
+            picker.setVisible(true);
+        }
+
+        function onDrivePickerResult(data) {
+            if (data.action === google.picker.Action.PICKED) {
+                const folder = data.docs[0];
+                setProjectDriveFolder(folder.id);
+            }
         }
 
         // 呼叫 Drive API 列出資料夾內可匯入的 PDF / 圖片檔案
