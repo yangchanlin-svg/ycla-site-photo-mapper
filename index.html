@@ -195,8 +195,8 @@
                         <i data-lucide="file-image" class="w-4 h-4 text-slate-500 flex-shrink-0"></i>
                         <span id="filename-display" class="truncate font-mono">尚未載入平面圖</span>
                     </div>
-                    <button onclick="triggerReplaceCurrentSheet()" class="text-teal-400 hover:text-teal-300 font-bold flex-shrink-0 flex items-center gap-1">
-                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>更換此圖頁底圖
+                    <button onclick="openDriveImportModal()" class="text-teal-400 hover:text-teal-300 font-bold flex-shrink-0 flex items-center gap-1">
+                        <i data-lucide="cloud-download" class="w-3.5 h-3.5"></i>從雲端新增圖頁
                     </button>
                 </div>
             </div>
@@ -208,45 +208,27 @@
             <!-- 圖頁/樓層切換籤：一個專案可有多張平面圖，各自獨立標記與編號 -->
             <div id="floorplan-tabs" class="absolute top-0 inset-x-0 z-[25] bg-slate-950/95 border-b border-slate-800 flex items-center gap-1.5 px-2 py-2 no-print">
                 <div id="floorplan-tabs-list" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 min-w-0"></div>
-                <button onclick="triggerFileInput()" class="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-400 flex items-center justify-center border border-slate-700" title="新增圖頁／樓層">
+                <button onclick="openDriveImportModal()" class="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-400 flex items-center justify-center border border-slate-700" title="從 Google Drive 新增圖頁／樓層">
                     <i data-lucide="plus" class="w-4 h-4"></i>
                 </button>
             </div>
 
-            <!-- 拖曳提示遮罩：無論目前有沒有底圖，把檔案拖到整個畫布上都會新增圖頁 -->
-            <div id="drag-hint-overlay" class="hidden absolute inset-0 bg-teal-950/85 border-4 border-dashed border-teal-400 z-[26] flex items-center justify-center pointer-events-none no-print">
-                <div class="text-center text-teal-100">
-                    <i data-lucide="upload-cloud" class="w-12 h-12 mx-auto mb-2"></i>
-                    <p class="text-base font-bold">放開以新增圖頁</p>
-                    <p class="text-xs text-teal-200/80 mt-1">可一次拖入多個 PDF 或圖片，各自轉成獨立圖頁</p>
-                </div>
-            </div>
-
-            <!-- 遮罩：未載入平面圖時顯示 (內建拖曳 Drop Zone 感應) -->
+            <!-- 遮罩：未載入平面圖時顯示，導引到雲端匯入 (圖頁一律從 Google Drive 匯入，確保桌電與手機看到同一批圖) -->
             <div id="upload-overlay" class="absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center p-6 z-20 transition-all duration-300">
-                <div id="drop-zone" class="max-w-md w-full bg-slate-950 border-2 border-dashed border-slate-800 p-8 rounded-2xl shadow-2xl text-center transition-all duration-300 transform">
+                <div class="max-w-md w-full bg-slate-950 border-2 border-dashed border-slate-800 p-8 rounded-2xl shadow-2xl text-center">
                     <div class="w-16 h-16 bg-teal-500/10 text-teal-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-teal-500/20">
-                        <i data-lucide="upload-cloud" class="w-8 h-8"></i>
+                        <i data-lucide="cloud-download" class="w-8 h-8"></i>
                     </div>
-                    <h2 class="text-lg font-bold text-white mb-2">載入建築平面圖</h2>
-                    <p class="text-sm text-slate-400 mb-6 leading-relaxed">請上傳該樓層的 <span class="text-teal-400 font-semibold">PDF 圖紙</span>、CAD 匯出的 <span class="text-teal-400 font-semibold">JPG/PNG 圖片</span>。可一次選取多個檔案，或上傳多頁 PDF，每頁／每個檔案都會自動變成一個獨立圖頁。</p>
+                    <h2 class="text-lg font-bold text-white mb-2">從 Google Drive 載入建築平面圖</h2>
+                    <p class="text-sm text-slate-400 mb-6 leading-relaxed">圖頁一律從 Google Drive 資料夾匯入，這樣不管在桌電或手機上，登入同一個 Google 帳號都能看到同一批圖紙。請先把 <span class="text-teal-400 font-semibold">PDF 圖紙</span>或<span class="text-teal-400 font-semibold">JPG/PNG 圖片</span>上傳到你的 Drive 資料夾。</p>
 
-                    <div class="space-y-4">
-                        <button onclick="triggerFileInput()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-teal-950/50">
-                            <i data-lucide="file-plus" class="w-5 h-5"></i>
-                            <span>選擇 PDF 或 圖片檔案</span>
-                        </button>
+                    <button onclick="openDriveImportModal()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg shadow-teal-950/50">
+                        <i data-lucide="cloud-download" class="w-5 h-5"></i>
+                        <span>從 Google Drive 匯入</span>
+                    </button>
 
-                        <!-- 拖曳提示說明 -->
-                        <div class="text-xs text-slate-400 flex items-center justify-center gap-1">
-                            <span class="w-6 border-t border-slate-800"></span>
-                            <span>或直接將檔案拖曳至此區域</span>
-                            <span class="w-6 border-t border-slate-800"></span>
-                        </div>
-
-                        <div class="text-xs text-slate-500">
-                            (檔案完全保存在本機，不會上傳到任何伺服器，安全保密)
-                        </div>
+                    <div class="text-xs text-slate-500 mt-4">
+                        (匯入的圖紙僅作為平面圖底圖；拍照標記與照片仍只存在你自己的裝置上，不會上傳)
                     </div>
                 </div>
             </div>
@@ -259,9 +241,6 @@
                     <p class="text-xs text-slate-500">大尺寸 PDF 渲染可能需要幾秒鐘，請稍候</p>
                 </div>
             </div>
-
-            <!-- 隱藏的 Input 檔案選擇器 -->
-            <input type="file" id="map-file-input" accept="application/pdf, image/*" multiple class="hidden" onchange="handleFileSelect(event)">
 
             <!-- 隱藏的相機拍照 Input -->
             <input type="file" id="camera-file-input" accept="image/*" capture="camera" class="hidden" onchange="handleCameraCapture(event)">
@@ -609,7 +588,6 @@
         // 圖頁(樓層)管理：一個專案可以有多張平面圖，各自獨立標記與編號
         let floorplans = []; // 當前專案下所有圖頁 { id, projectId, name, data, filename, numberingPrefix, numberingDigits, order }
         let currentFloorplanId = null;
-        let pendingUploadMode = 'new'; // 'new' = 新增圖頁(可一次轉入多頁PDF) | 'replace' = 替換目前圖頁底圖
 
         // 暫存新增中的 Marker 位置與當前編輯狀態
         let pendingMarkerPos = { x: 0, y: 0 };
@@ -634,7 +612,6 @@
         window.onload = function() {
             lucide.createIcons();
             initDatabase();
-            setupDragAndDrop(); // 啟用拖曳上傳支援
             registerServiceWorker(); // 註冊離線快取與 PWA 安裝支援
 
             // 綁定視窗大小改變事件，維持畫布定位
@@ -695,48 +672,6 @@
                     markerStore.createIndex("floorplanId", "floorplanId", { unique: false });
                 }
             };
-        }
-
-        // --- 2.5 拖曳上傳 (Drag & Drop) 事件設定與動畫回饋 ---
-        // 無論目前是否已經載入底圖，整個畫布區域都可以拖曳檔案進來新增圖頁
-        function setupDragAndDrop() {
-            const canvasArea = document.getElementById('canvas-area');
-            const dragHint = document.getElementById('drag-hint-overlay');
-            if (!canvasArea || !dragHint) return;
-
-            let dragCounter = 0; // 處理子元素互相觸發 dragenter/dragleave 造成的閃爍
-
-            // 阻擋瀏覽器預設開啟檔案動作
-            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-                canvasArea.addEventListener(eventName, preventDefaults, false);
-                document.body.addEventListener(eventName, preventDefaults, false);
-            });
-
-            canvasArea.addEventListener('dragenter', () => {
-                dragCounter++;
-                dragHint.classList.remove('hidden');
-            }, false);
-
-            canvasArea.addEventListener('dragleave', () => {
-                dragCounter = Math.max(0, dragCounter - 1);
-                if (dragCounter === 0) dragHint.classList.add('hidden');
-            }, false);
-
-            // 處理置放後的檔案上傳 (支援一次拖入多個檔案；不論目前是否已有底圖，一律視為新增圖頁)
-            canvasArea.addEventListener('drop', (e) => {
-                dragCounter = 0;
-                dragHint.classList.add('hidden');
-                const files = e.dataTransfer.files;
-                if (files && files.length > 0) {
-                    pendingUploadMode = 'new';
-                    processFileBatch(Array.from(files));
-                }
-            }, false);
-        }
-
-        function preventDefaults(e) {
-            e.preventDefault();
-            e.stopPropagation();
         }
 
         // --- 3. 專案管理 (新增、讀取、編輯、切換) ---
@@ -1299,37 +1234,10 @@
             return idx > 0 ? filename.substring(0, idx) : filename;
         }
 
-        // 開啟檔案選擇器以「新增圖頁」(多頁PDF會一次轉出多張圖頁，例如各樓層各一頁)
-        function triggerFileInput() {
-            pendingUploadMode = 'new';
-            document.getElementById('map-file-input').click();
-        }
-
-        // 開啟檔案選擇器以「替換目前圖頁的底圖」(保留此圖頁既有的拍照標記)
-        function triggerReplaceCurrentSheet() {
-            if (!currentFloorplanId) return triggerFileInput();
-            pendingUploadMode = 'replace';
-            document.getElementById('map-file-input').click();
-        }
-
-        function handleFileSelect(event) {
-            const files = Array.from(event.target.files || []);
-            event.target.value = ""; // 允許重複選同一檔案也能觸發 onchange
-            if (files.length === 0) return;
-            processFileBatch(files);
-        }
-
-        // 依序處理一批檔案 (支援一次選取/拖曳多個 PDF 或圖片，每個檔案各自轉成圖頁)
+        // 依序處理一批檔案 (用於 Google Drive 匯入；每個檔案各自轉成一個圖頁，多頁PDF則每頁各一個圖頁)
         function processFileBatch(files) {
             const loading = document.getElementById('loading-overlay');
             loading.classList.remove('hidden');
-
-            // 替換模式只套用在目前這一個圖頁，多選時僅取第一個檔案
-            if (pendingUploadMode === 'replace') {
-                if (files.length > 1) showToast("替換底圖僅會使用第一個檔案", "warning");
-                processSelectedFile(files[0], () => loading.classList.add('hidden'), true);
-                return;
-            }
 
             let index = 0;
             function next() {
@@ -1355,8 +1263,8 @@
                     const typedarray = new Uint8Array(this.result);
 
                     pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
-                        // 替換模式只需要第一頁；新增模式則把每一頁都轉成一個獨立圖頁(例如各樓層)
-                        const totalPages = (pendingUploadMode === 'replace') ? 1 : pdf.numPages;
+                        // 每一頁都轉成一個獨立圖頁(例如各樓層各一頁)
+                        const totalPages = pdf.numPages;
                         const pageImages = [];
 
                         function renderPage(pageNum) {
@@ -1427,41 +1335,11 @@
             img.src = base64Str;
         }
 
-        // 依照目前模式，將轉出的圖片寫入資料庫：'replace' 替換目前圖頁底圖／'new' 新增一或多個圖頁
+        // 將轉出的圖片寫入資料庫，每一頁(或每個檔案)各自建立一個新圖頁
         function commitFloorplanUpload(pageImages, filename, shouldSwitch, onDone) {
             onDone = onDone || function () {};
-            const mode = pendingUploadMode;
-            pendingUploadMode = 'new'; // 用完即重置，避免影響下一次操作
 
-            if (mode === 'replace' && currentFloorplanId) {
-                const tx = db.transaction(["floorplans"], "readwrite");
-                const store = tx.objectStore("floorplans");
-                store.get(currentFloorplanId).onsuccess = function(event) {
-                    const fp = event.target.result;
-                    if (!fp) { onDone(); return; }
-
-                    fp.data = pageImages[0];
-                    fp.filename = filename;
-
-                    store.put(fp).onsuccess = function() {
-                        const local = floorplans.find(f => f.id === currentFloorplanId);
-                        if (local) {
-                            local.data = fp.data;
-                            local.filename = fp.filename;
-                        }
-
-                        document.getElementById('floorplan-image').src = fp.data;
-                        document.getElementById('filename-display').innerText = fp.filename;
-                        document.getElementById('upload-overlay').classList.add('hidden');
-                        mapLoaded = true;
-                        showToast("底圖已更新！");
-                        onDone();
-                    };
-                };
-                return;
-            }
-
-            // 新增模式：每一頁建立一個新圖頁(樓層)，預設名稱直接採用上傳的檔名，方便與圖紙對照
+            // 每一頁建立一個新圖頁(樓層)，預設名稱直接採用上傳的檔名，方便與圖紙對照
             const existingCount = floorplans.length;
             const baseName = stripFileExtension(filename);
             const newSheets = pageImages.map((data, idx) => ({
@@ -1684,7 +1562,6 @@
         function importSingleDriveFile(file) {
             showToast(`正在匯入「${file.name}」...`);
             fetchDriveFileAsFile(file).then(fileObj => {
-                pendingUploadMode = 'new';
                 processFileBatch([fileObj]);
                 closeDriveImportModal();
             }).catch(err => showToast(err.message, "error"));
@@ -1696,7 +1573,6 @@
 
             Promise.all(driveFileListCache.map(f => fetchDriveFileAsFile(f)))
                 .then(fileObjs => {
-                    pendingUploadMode = 'new';
                     processFileBatch(fileObjs);
                     closeDriveImportModal();
                 })
