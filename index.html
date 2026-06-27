@@ -1689,7 +1689,7 @@
 
         // 圖頁本機沒有圖片內容時，從 Drive 重新下載並 (若為 PDF) 重新渲染同一頁，補上圖片快取
         function fetchAndCacheFloorplanImage(fp) {
-            const url = `https://www.googleapis.com/drive/v3/files/${fp.driveFileId}?alt=media`;
+            const url = `https://www.googleapis.com/drive/v3/files/${fp.driveFileId}?alt=media&supportsAllDrives=true`;
             fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
                 .then(res => {
                     if (!res.ok) throw new Error("無法從 Drive 補抓圖片");
@@ -1848,7 +1848,8 @@
             const query = encodeURIComponent(
                 `'${folderId}' in parents and trashed = false and (mimeType = 'application/pdf' or mimeType contains 'image/')`
             );
-            const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,modifiedTime)&orderBy=name&pageSize=100`;
+            // supportsAllDrives / includeItemsFromAllDrives / corpora=allDrives：讓「共用雲端硬碟」裡的資料夾也能正常讀取，不只「我的雲端硬碟」
+            const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,modifiedTime)&orderBy=name&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives`;
 
             fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
                 .then(res => {
@@ -1856,7 +1857,12 @@
                         googleAccessToken = null;
                         throw new Error("登入已過期，請重新登入 Google");
                     }
-                    if (!res.ok) throw new Error("讀取資料夾失敗，請確認帳號有此資料夾的存取權限");
+                    if (!res.ok) {
+                        return res.json().catch(() => null).then(body => {
+                            const detail = body && body.error && body.error.message ? `：${body.error.message}` : "";
+                            throw new Error(`讀取資料夾失敗，請確認帳號有此資料夾的存取權限${detail}`);
+                        });
+                    }
                     return res.json();
                 })
                 .then(data => {
@@ -1898,7 +1904,7 @@
         // 透過 Drive API 下載檔案內容，包裝成 File 物件後丟進現有的圖頁上傳流程
         // (額外把來源的 driveFileId 掛在 File 物件上，這樣建立出的圖頁才能記住自己的圖片是從哪個 Drive 檔案來的，供其他裝置之後自動補抓)
         function fetchDriveFileAsFile(file) {
-            const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
+            const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`;
             return fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
                 .then(res => {
                     if (!res.ok) throw new Error(`下載「${file.name}」失敗`);
