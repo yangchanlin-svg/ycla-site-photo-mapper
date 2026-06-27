@@ -1532,10 +1532,12 @@
         }
 
         function showDrivePicker() {
+            // 只顯示「我的雲端硬碟」裡自己擁有的資料夾，從根目錄開始導覽，
+            // 避免列出別人共用、共用雲端硬碟等不相關的資料夾
             const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
                 .setSelectFolderEnabled(true)
-                .setIncludeFolders(true)
-                .setMimeTypes('application/vnd.google-apps.folder');
+                .setOwnedByMe(true)
+                .setParent('root');
 
             const picker = new google.picker.PickerBuilder()
                 .addView(view)
