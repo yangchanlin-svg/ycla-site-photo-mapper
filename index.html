@@ -1153,6 +1153,12 @@
 
         // --- 4. 檔案處理 (PDF 轉 Canvas 與底圖載入) ---
 
+        // 去除檔名的副檔名，作為圖頁預設名稱 (例如 "A1-02_3F平面圖.pdf" -> "A1-02_3F平面圖")
+        function stripFileExtension(filename) {
+            const idx = filename.lastIndexOf('.');
+            return idx > 0 ? filename.substring(0, idx) : filename;
+        }
+
         // 開啟檔案選擇器以「新增圖頁」(多頁PDF會一次轉出多張圖頁，例如各樓層各一頁)
         function triggerFileInput() {
             pendingUploadMode = 'new';
@@ -1315,12 +1321,13 @@
                 return;
             }
 
-            // 新增模式：每一頁建立一個新圖頁(樓層)
+            // 新增模式：每一頁建立一個新圖頁(樓層)，預設名稱直接採用上傳的檔名，方便與圖紙對照
             const existingCount = floorplans.length;
+            const baseName = stripFileExtension(filename);
             const newSheets = pageImages.map((data, idx) => ({
                 id: `fp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${idx}`,
                 projectId: currentProjectId,
-                name: pageImages.length > 1 ? `圖頁${existingCount + idx + 1}` : `圖頁${existingCount + 1}`,
+                name: pageImages.length > 1 ? `${baseName}_p${idx + 1}` : baseName,
                 data: data,
                 filename: pageImages.length > 1 ? `${filename} (第${idx + 1}頁)` : filename,
                 numberingPrefix: "",

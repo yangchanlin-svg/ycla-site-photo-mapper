@@ -1,4 +1,4 @@
-const CACHE_NAME = "ycla-site-photo-mapper-v4";
+const CACHE_NAME = "ycla-site-photo-mapper-v5";
 
 const CORE_ASSETS = [
   "./",
