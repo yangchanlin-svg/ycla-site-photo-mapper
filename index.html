@@ -51,6 +51,8 @@
         const fsDb = getFirestore(app);
         const provider = new GoogleAuthProvider();
         provider.addScope("https://www.googleapis.com/auth/drive.readonly");
+        // drive.file：只能存取「這個 App 自己建立」的檔案，用於把拍照標記的照片上傳到 Drive 供其他裝置同步取回
+        provider.addScope("https://www.googleapis.com/auth/drive.file");
         // 每次登入都讓使用者重新選擇帳號，避免多帳號裝置上誤用上一個登入的帳號
         provider.setCustomParameters({ prompt: "select_account" });
 
@@ -107,7 +109,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v35</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v36</span>
                 </h1>
             </div>
         </div>
@@ -1711,7 +1713,7 @@
             window.FB.deleteDoc(fsFloorplanDoc(projectId, floorplanId)).catch(err => console.error("delete floorplan failed", err));
         }
 
-        // 標記點只同步位置／角度／編號／備註，不含照片本體 (照片仍只存裝置本機)
+        // 標記點同步位置／角度／編號／備註，以及照片在 Drive 上的檔案 ID (照片本體仍快取在裝置本機，只是多存一個雲端參照供其他裝置補抓)
         function pushMarkerDoc(floorplanId, marker) {
             if (!currentUser) return;
             window.FB.setDoc(fsMarkerDoc(currentProjectId, floorplanId, String(marker.id)), {
@@ -1720,6 +1722,7 @@
                 angle: marker.angle,
                 label: marker.label || "",
                 memo: marker.memo || "",
+                photoDriveFileId: marker.photoDriveFileId || null,
                 updatedAt: window.FB.serverTimestamp()
             }, { merge: true }).catch(err => console.error("push marker failed", err));
         }
@@ -1727,6 +1730,88 @@
         function deleteMarkerDoc(floorplanId, markerId) {
             if (!currentUser) return;
             window.FB.deleteDoc(fsMarkerDoc(currentProjectId, floorplanId, String(markerId))).catch(err => console.error("delete marker failed", err));
+        }
+
+        // --- 拍照標記的照片上傳到 Drive / 從 Drive 補抓，讓其他裝置也能看到照片 ---
+
+        // 取得(或建立)目前專案用來存放拍照記錄的 Drive 資料夾，建立後記住 ID 供下次直接使用
+        function ensurePhotosFolderId(project) {
+            if (project.photosFolderId) return Promise.resolve(project.photosFolderId);
+            if (!project.driveFolderId || !googleAccessToken) return Promise.reject(new Error("尚未連結 Drive 資料夾或未登入"));
+
+            return fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: '拍照記錄',
+                    mimeType: 'application/vnd.google-apps.folder',
+                    parents: [project.driveFolderId]
+                })
+            })
+            .then(res => { if (!res.ok) throw new Error('建立 Drive 拍照資料夾失敗'); return res.json(); })
+            .then(folder => {
+                project.photosFolderId = folder.id;
+                const tx = db.transaction(["projects"], "readwrite");
+                tx.objectStore("projects").put(project);
+                pushProjectDoc(project);
+                return folder.id;
+            });
+        }
+
+        // 把拍照標記的照片(base64)上傳到 Drive，回傳新檔案的 ID
+        function uploadPhotoToDrive(base64DataUrl, filename) {
+            if (!currentUser || !googleAccessToken) return Promise.reject(new Error("未登入"));
+
+            return idbGetAsync("projects", currentProjectId)
+                .then(project => ensurePhotosFolderId(project).then(folderId => ({ project, folderId })))
+                .then(({ folderId }) => {
+                    const mimeMatch = base64DataUrl.match(/^data:(.+);base64,/);
+                    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+                    const base64Body = base64DataUrl.substring(base64DataUrl.indexOf(',') + 1);
+
+                    const metadata = { name: filename, parents: [folderId] };
+                    const boundary = 'ycla_boundary_' + Date.now();
+                    const body =
+                        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+                        `--${boundary}\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64Body}\r\n` +
+                        `--${boundary}--`;
+
+                    return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true', {
+                        method: 'POST',
+                        headers: {
+                            Authorization: `Bearer ${googleAccessToken}`,
+                            'Content-Type': `multipart/related; boundary=${boundary}`
+                        },
+                        body: body
+                    });
+                })
+                .then(res => { if (!res.ok) throw new Error('上傳照片到 Drive 失敗'); return res.json(); })
+                .then(file => file.id);
+        }
+
+        // 本機沒有照片快取時，從 Drive 補抓回來 (例如桌電要看手機現場拍的照片)
+        function fetchPhotoFromDrive(marker) {
+            if (!marker.photoDriveFileId || !googleAccessToken) return;
+            const url = `https://www.googleapis.com/drive/v3/files/${marker.photoDriveFileId}?alt=media&supportsAllDrives=true`;
+
+            fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+                .then(res => { if (!res.ok) throw new Error('從 Drive 補抓照片失敗'); return res.blob(); })
+                .then(blob => blobToBase64(blob))
+                .then(base64 => {
+                    marker.photo = base64;
+                    idbPutAsync("markers", marker);
+
+                    const local = markers.find(m => m.id === marker.id);
+                    if (local) local.photo = base64;
+
+                    updateMarkersListUI();
+                    if (editingMarkerId === marker.id) {
+                        document.getElementById('detail-photo-preview').src = base64;
+                        document.getElementById('detail-photo-preview').classList.remove('hidden');
+                        document.getElementById('detail-no-photo').classList.add('hidden');
+                    }
+                })
+                .catch(err => console.error("fetchPhotoFromDrive failed", err));
         }
 
         // --- 拉取 (Firestore → 本機 IndexedDB)：登入成功或重新整理後自動偵測到已登入時執行一次 ---
@@ -1798,7 +1883,13 @@
             merged.angle = data.angle;
             merged.label = data.label || String(numericId);
             merged.memo = data.memo || "";
+            merged.photoDriveFileId = data.photoDriveFileId || null;
             await idbPutAsync("markers", merged);
+
+            // 本機還沒有這個標記的照片快取，但 Drive 上有，就在背景自動補抓 (例如桌電補抓手機現場拍的照片)
+            if (!merged.photo && merged.photoDriveFileId && googleAccessToken) {
+                fetchPhotoFromDrive(merged);
+            }
         }
 
         // 圖頁本機沒有圖片內容時，從 Drive 重新下載並 (若為 PDF) 重新渲染同一頁，補上圖片快取
@@ -2486,10 +2577,24 @@
                 updateMarkersListUI();
                 updateNextLabelPreview();
                 pushMarkerDoc(currentFloorplanId, newMarker);
+                uploadMarkerPhotoIfSignedIn(newMarker);
                 showToast(`定位標籤 ${labelStr} 新增完成並關聯照片`);
                 openDetailModal(newMarker.id);
                 setMode('pan');
             };
+        }
+
+        // 若已登入 Google，把標記的照片上傳到 Drive，讓其他裝置之後也能補抓看到 (未登入時靜默跳過，不影響本機使用)
+        function uploadMarkerPhotoIfSignedIn(marker) {
+            if (!currentUser || !currentProjectDriveFolderId || !marker.photo) return;
+            const filename = `${marker.label || marker.id}_${Date.now()}.jpg`;
+            uploadPhotoToDrive(marker.photo, filename)
+                .then(fileId => {
+                    marker.photoDriveFileId = fileId;
+                    idbPutAsync("markers", marker);
+                    pushMarkerDoc(marker.floorplanId, marker);
+                })
+                .catch(err => console.error("upload marker photo failed", err));
         }
 
         function updateExistingMarkerPhoto(id, photoData) {
@@ -2512,6 +2617,7 @@
                         document.getElementById('detail-photo-preview').classList.remove('hidden');
 
                         refreshMarkerUI(marker);
+                        uploadMarkerPhotoIfSignedIn(marker);
                         showToast(`照片已更新`);
                     };
                 }
