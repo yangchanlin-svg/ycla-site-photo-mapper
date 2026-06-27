@@ -107,7 +107,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v34</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v35</span>
                 </h1>
             </div>
         </div>
@@ -414,9 +414,12 @@
             </div>
 
             <div class="p-5 flex-1 flex flex-col items-center">
-                <!-- 照片預覽 -->
-                <div class="w-full aspect-[4/3] bg-slate-950 rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center mb-4 relative group">
+                <!-- 照片預覽 (此處為裁切縮圖，點擊可看完整原圖) -->
+                <div class="w-full aspect-[4/3] bg-slate-950 rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center mb-4 relative group cursor-pointer" onclick="openPhotoLightbox()">
                     <img id="detail-photo-preview" src="" alt="現場照片" class="w-full h-full object-cover">
+                    <div class="absolute bottom-1.5 right-1.5 bg-slate-950/80 text-white text-[10px] px-2 py-1 rounded-full flex items-center gap-1 pointer-events-none">
+                        <i data-lucide="maximize" class="w-3 h-3"></i>點擊看完整原圖
+                    </div>
                     <div id="detail-no-photo" class="hidden text-center text-slate-500">
                         <i data-lucide="image-off" class="w-10 h-10 mx-auto mb-2"></i>
                         <p class="text-xs">尚未拍攝現場照片</p>
@@ -479,6 +482,14 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- 全螢幕照片檢視：顯示完整原圖，不裁切 -->
+    <div id="photo-lightbox" class="hidden fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-2 no-print" onclick="closePhotoLightbox()">
+        <img id="photo-lightbox-img" src="" alt="完整照片" class="max-w-full max-h-full object-contain">
+        <button onclick="closePhotoLightbox()" class="absolute top-4 right-4 bg-slate-950/80 text-white w-10 h-10 rounded-full flex items-center justify-center">
+            <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
     </div>
 
     <!-- 彈出視窗 3：切換/建立專案彈窗 -->
@@ -2689,6 +2700,18 @@
         function closeDetailModal() {
             document.getElementById('marker-detail-modal').classList.add('hidden');
             editingMarkerId = null;
+        }
+
+        // 全螢幕檢視完整原圖 (詳情視窗裡的縮圖是裁切過的 4:3 比例)
+        function openPhotoLightbox() {
+            const preview = document.getElementById('detail-photo-preview');
+            if (!preview.src || preview.classList.contains('hidden')) return;
+            document.getElementById('photo-lightbox-img').src = preview.src;
+            document.getElementById('photo-lightbox').classList.remove('hidden');
+        }
+
+        function closePhotoLightbox() {
+            document.getElementById('photo-lightbox').classList.add('hidden');
         }
 
         function retriggerCameraForDetail() {
