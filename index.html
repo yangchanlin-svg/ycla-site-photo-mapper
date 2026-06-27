@@ -73,10 +73,6 @@
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
                 </h1>
-                <div class="text-sm text-slate-400 flex items-center mt-0.5" id="project-title-display">
-                    <!-- JS 動態載入專案編號與名稱 -->
-                    載入中...
-                </div>
             </div>
         </div>
         <div class="flex items-center space-x-2">
@@ -113,8 +109,17 @@
                 </span>
             </button>
 
+            <!-- 專案資訊卡：清楚顯示目前作業中的專案，點擊可切換/管理專案 -->
+            <button onclick="toggleProjectModal()" class="w-full px-4 pt-1 md:pt-4 pb-3 border-b border-slate-800 flex-shrink-0 flex items-center justify-between text-left hover:bg-slate-900/60 transition group">
+                <div class="overflow-hidden">
+                    <span id="sidebar-project-code" class="inline-block bg-teal-600/15 text-teal-300 px-2 py-0.5 rounded text-xs font-mono border border-teal-500/30">PROJ-01</span>
+                    <p id="sidebar-project-name" class="text-base font-bold text-white truncate mt-1.5">未命名專案</p>
+                </div>
+                <i data-lucide="chevrons-up-down" class="w-4 h-4 text-slate-500 group-hover:text-teal-400 flex-shrink-0 ml-2"></i>
+            </button>
+
             <!-- 控制區 (永遠可見：手機為抽屜的「峰值」區，桌面為一般側邊欄區塊) -->
-            <div class="px-4 pb-4 pt-1 md:pt-4 md:p-4 border-b border-slate-800 flex-shrink-0">
+            <div class="px-4 pb-4 pt-3 md:pt-4 md:p-4 border-b border-slate-800 flex-shrink-0">
                 <div class="flex items-center justify-between mb-3">
                     <span class="text-xs font-bold text-slate-400 tracking-wider uppercase">操作模式</span>
                     <span id="save-status" class="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -278,7 +283,7 @@
             </div>
 
             <!-- 右下角輔助控制按鈕 -->
-            <div class="absolute bottom-28 md:bottom-4 right-4 flex flex-col space-y-2 z-10 no-print">
+            <div class="absolute bottom-64 md:bottom-4 right-4 flex flex-col space-y-2 z-10 no-print">
                 <button onclick="zoomIn()" class="w-10 h-10 bg-slate-950/90 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-lg flex items-center justify-center shadow-lg transition" title="放大">
                     <i data-lucide="zoom-in" class="w-5 h-5"></i>
                 </button>
@@ -291,7 +296,7 @@
             </div>
 
             <!-- 左下角當前操作提示 -->
-            <div id="status-bubble" class="absolute bottom-28 md:bottom-4 left-4 bg-slate-950/90 border border-slate-800 text-slate-300 px-3 py-1.5 rounded-lg text-xs flex items-center space-x-2 z-10 shadow-lg pointer-events-none no-print">
+            <div id="status-bubble" class="absolute bottom-64 md:bottom-4 left-4 bg-slate-950/90 border border-slate-800 text-slate-300 px-3 py-1.5 rounded-lg text-xs flex items-center space-x-2 z-10 shadow-lg pointer-events-none no-print">
                 <span class="w-2 h-2 rounded-full bg-teal-400"></span>
                 <span id="status-bubble-text">拖曳或縮放平面圖，尋找標記點</span>
             </div>
@@ -945,11 +950,8 @@
         }
 
         function updateHeaderDisplay() {
-            const display = document.getElementById('project-title-display');
-            display.innerHTML = `
-                <span class="bg-slate-800 text-slate-300 px-2 py-0.5 rounded text-xs font-mono mr-1.5 border border-slate-700">${currentProjectCode}</span>
-                <span class="truncate font-semibold text-slate-300 text-sm">${currentProjectName}</span>
-            `;
+            document.getElementById('sidebar-project-code').innerText = currentProjectCode;
+            document.getElementById('sidebar-project-name').innerText = currentProjectName;
         }
 
         // 載入當前選中專案：先處理舊版資料搬移，再載入圖頁(樓層)清單
