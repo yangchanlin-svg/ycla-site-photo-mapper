@@ -461,14 +461,22 @@
             <div class="p-5 flex-1 overflow-y-auto no-scrollbar">
                 <!-- 狀態一：尚未登入 Google -->
                 <div id="drive-step-signin">
-                    <p class="text-xs text-slate-400 leading-relaxed mb-4">
-                        登入 Google 帳號後，就能讀取你指定的 Google Drive 資料夾內的 PDF／圖片，直接匯入成本專案的圖頁。桌電上傳到 Drive 資料夾、手機登入同一個帳號就能匯入同一批檔案。
-                    </p>
-                    <button onclick="signInGoogleDrive()" class="w-full bg-white hover:bg-slate-100 text-slate-800 font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg">
-                        <i data-lucide="log-in" class="w-5 h-5"></i>
-                        <span>登入 Google 帳號</span>
-                    </button>
-                    <p id="drive-signin-error" class="hidden text-xs text-rose-400 mt-3"></p>
+                    <!-- 嘗試靜默自動登入中 -->
+                    <div id="drive-silent-attempt" class="hidden flex flex-col items-center py-6">
+                        <div class="w-8 h-8 border-3 border-teal-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                        <p class="text-xs text-slate-400">正在自動登入 Google...</p>
+                    </div>
+
+                    <div id="drive-signin-button-area">
+                        <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                            登入 Google 帳號後，就能讀取你指定的 Google Drive 資料夾內的 PDF／圖片，直接匯入成本專案的圖頁。桌電上傳到 Drive 資料夾、手機登入同一個帳號就能匯入同一批檔案。
+                        </p>
+                        <button onclick="signInGoogleDrive()" class="w-full bg-white hover:bg-slate-100 text-slate-800 font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg">
+                            <i data-lucide="log-in" class="w-5 h-5"></i>
+                            <span>登入 Google 帳號</span>
+                        </button>
+                        <p id="drive-signin-error" class="hidden text-xs text-rose-400 mt-3"></p>
+                    </div>
                 </div>
 
                 <!-- 狀態二：已登入，尚未設定此專案的資料夾 -->
@@ -1395,7 +1403,13 @@
 
         function openDriveImportModal() {
             document.getElementById('drive-import-modal').classList.remove('hidden');
-            updateDriveModalStep();
+
+            // 若之前成功登入過，先在背景嘗試靜默重新取得權杖，減少每次都要手動點「登入」
+            if (!googleAccessToken && localStorage.getItem('driveEverSignedIn') === 'true') {
+                attemptSilentGoogleSignIn();
+            } else {
+                updateDriveModalStep();
+            }
         }
 
         function closeDriveImportModal() {
@@ -1407,6 +1421,9 @@
             const stepSignin = document.getElementById('drive-step-signin');
             const stepFolder = document.getElementById('drive-step-folder');
             const stepFiles = document.getElementById('drive-step-files');
+
+            document.getElementById('drive-silent-attempt').classList.add('hidden');
+            document.getElementById('drive-signin-button-area').classList.remove('hidden');
 
             if (!googleAccessToken) {
                 stepSignin.classList.remove('hidden');
@@ -1428,6 +1445,45 @@
             }
         }
 
+        // 在背景嘗試「靜默」重新登入(不跳出視窗)；如果失敗，退回顯示一般的登入按鈕
+        function attemptSilentGoogleSignIn() {
+            if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+                updateDriveModalStep();
+                return;
+            }
+
+            document.getElementById('drive-silent-attempt').classList.remove('hidden');
+            document.getElementById('drive-signin-button-area').classList.add('hidden');
+
+            let settled = false;
+            const finish = (success) => {
+                if (settled) return;
+                settled = true;
+                if (!success) updateDriveModalStep();
+            };
+
+            if (!googleTokenClient) {
+                googleTokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: GOOGLE_CLIENT_ID,
+                    scope: DRIVE_SCOPE,
+                    callback: (response) => {
+                        if (response && response.access_token) {
+                            googleAccessToken = response.access_token;
+                            localStorage.setItem('driveEverSignedIn', 'true');
+                            updateDriveModalStep();
+                            finish(true);
+                        } else {
+                            finish(false);
+                        }
+                    },
+                    error_callback: () => finish(false)
+                });
+            }
+
+            googleTokenClient.requestAccessToken({ prompt: '' });
+            setTimeout(() => finish(false), 4000); // 保護機制：4 秒內沒回應就顯示一般登入按鈕
+        }
+
         // 登入 Google 帳號並取得可呼叫 Drive API 的存取權杖 (Google Identity Services 隱式授權流程)
         function signInGoogleDrive() {
             if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
@@ -1446,6 +1502,7 @@
                     callback: (response) => {
                         if (response && response.access_token) {
                             googleAccessToken = response.access_token;
+                            localStorage.setItem('driveEverSignedIn', 'true');
                             updateDriveModalStep();
                         } else {
                             showDriveError('drive-signin-error', "Google 登入失敗，請重試");
