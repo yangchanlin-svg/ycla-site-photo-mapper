@@ -107,7 +107,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v33</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v34</span>
                 </h1>
             </div>
         </div>
@@ -423,6 +423,31 @@
                     </div>
                 </div>
 
+                <!-- 拍照方向調整：拍完照後仍可隨時重新調整方向，不會被鎖住 -->
+                <div class="w-full mb-4">
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2 flex items-center gap-1">
+                        <i data-lucide="compass" class="w-3.5 h-3.5 text-teal-400"></i>拍照方向 (可隨時調整)
+                    </label>
+                    <div class="flex items-center gap-4">
+                        <div class="relative w-24 h-24 bg-slate-950 rounded-full border-2 border-slate-800 flex items-center justify-center shadow-inner cursor-pointer flex-shrink-0" id="detail-compass-wheel" onmousedown="startDetailCompassDrag(event)" onmousemove="doDetailCompassDrag(event)" onmouseup="endDetailCompassDrag()" onmouseleave="endDetailCompassDrag()" ontouchstart="startDetailCompassTouch(event)" ontouchmove="doDetailCompassTouch(event)" ontouchend="endDetailCompassTouch()">
+                            <div class="absolute inset-1.5 border border-slate-800/40 rounded-full pointer-events-none"></div>
+                            <div id="detail-compass-pointer" class="w-16 h-16 flex items-center justify-center transition-transform duration-100 ease-out pointer-events-none" style="transform: rotate(0deg);">
+                                <div class="absolute -top-0.5 w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[16px] border-b-rose-500"></div>
+                                <div class="w-7 h-7 bg-rose-600 rounded-full border-2 border-white shadow-lg"></div>
+                            </div>
+                        </div>
+                        <div class="flex-1">
+                            <div class="text-xs text-slate-400 mb-1.5">當前方向：<span class="text-white font-mono font-bold" id="detail-degree-text">0°</span></div>
+                            <div class="grid grid-cols-2 gap-1">
+                                <button onclick="setDetailAnglePreset(0)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-1.5 rounded text-[11px] font-mono transition">↑ 北</button>
+                                <button onclick="setDetailAnglePreset(90)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-1.5 rounded text-[11px] font-mono transition">→ 東</button>
+                                <button onclick="setDetailAnglePreset(180)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-1.5 rounded text-[11px] font-mono transition">↓ 南</button>
+                                <button onclick="setDetailAnglePreset(270)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 py-1 px-1.5 rounded text-[11px] font-mono transition">← 西</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 手動修改單點標記編號 -->
                 <div class="w-full mb-3">
                     <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5 flex items-center gap-1">
@@ -673,6 +698,10 @@
         // 指南針 (Compass) 拖曳旋轉狀態
         let isCompassDragging = false;
         let currentAngle = 0;
+
+        // 標記詳情彈窗裡的羅盤狀態 (拍照後仍可重新調整方向)
+        let isDetailCompassDragging = false;
+        let detailAngle = 0;
 
         // 手機底部抽屜 (Bottom Sheet) 展開狀態
         let sidebarExpanded = false;
@@ -2310,6 +2339,63 @@
             updateCompassVisuals();
         }
 
+        // 標記詳情彈窗的羅盤：拍照完成後仍可隨時重新調整方向，不會被鎖住
+        function setDetailAnglePreset(angle) {
+            detailAngle = angle;
+            updateDetailCompassVisuals();
+        }
+
+        function updateDetailCompassVisuals() {
+            document.getElementById('detail-compass-pointer').style.transform = `rotate(${detailAngle}deg)`;
+            document.getElementById('detail-degree-text').innerText = `${Math.round(detailAngle)}°`;
+        }
+
+        function startDetailCompassDrag(e) {
+            isDetailCompassDragging = true;
+            doDetailCompassDrag(e);
+        }
+
+        function doDetailCompassDrag(e) {
+            if (!isDetailCompassDragging) return;
+            calculateDetailAngleFromEvent(e.clientX, e.clientY);
+        }
+
+        function endDetailCompassDrag() {
+            isDetailCompassDragging = false;
+        }
+
+        function startDetailCompassTouch(e) {
+            isDetailCompassDragging = true;
+            doDetailCompassTouch(e);
+        }
+
+        function doDetailCompassTouch(e) {
+            if (!isDetailCompassDragging || e.touches.length === 0) return;
+            calculateDetailAngleFromEvent(e.touches[0].clientX, e.touches[0].clientY);
+        }
+
+        function endDetailCompassTouch() {
+            isDetailCompassDragging = false;
+        }
+
+        function calculateDetailAngleFromEvent(clientX, clientY) {
+            const wheel = document.getElementById('detail-compass-wheel');
+            const rect = wheel.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const dx = clientX - centerX;
+            const dy = clientY - centerY;
+
+            let angleRad = Math.atan2(dy, dx);
+            let angleDeg = angleRad * (180 / Math.PI) + 90;
+
+            if (angleDeg < 0) angleDeg += 360;
+            detailAngle = angleDeg;
+
+            updateDetailCompassVisuals();
+        }
+
         // --- 8. 相機呼叫與照片處理 ---
         function triggerCameraCapture() {
             document.getElementById('camera-file-input').click();
@@ -2592,9 +2678,11 @@
                 noPhoto.classList.remove('hidden');
             }
 
-            // 帶入原本標記名稱與備註
+            // 帶入原本標記名稱、備註與拍照方向
             document.getElementById('detail-label').value = marker.label || "";
             document.getElementById('detail-memo').value = marker.memo || "";
+            detailAngle = marker.angle || 0;
+            updateDetailCompassVisuals();
             document.getElementById('marker-detail-modal').classList.remove('hidden');
         }
 
@@ -2630,20 +2718,18 @@
                 if (marker) {
                     marker.memo = memoText;
                     marker.label = newLabelText;
+                    marker.angle = detailAngle;
 
                     store.put(marker).onsuccess = function() {
                         const idx = markers.findIndex(m => m.id === editingMarkerId);
                         if (idx !== -1) {
                             markers[idx].memo = memoText;
                             markers[idx].label = newLabelText;
+                            markers[idx].angle = detailAngle;
                         }
 
-                        // 即時更新地圖上的 Marker 文字外觀，無需重繪整個圖層
-                        const markerDiv = document.getElementById(`map-marker-${editingMarkerId}`);
-                        if (markerDiv) {
-                            const labelCircle = markerDiv.querySelector('.label-circle');
-                            if (labelCircle) labelCircle.innerText = newLabelText;
-                        }
+                        // 即時更新地圖上的 Marker 文字與方向，無需重繪整個圖層
+                        refreshMarkerUI(marker);
 
                         updateMarkersListUI();
                         updateNextLabelPreview();
