@@ -24,10 +24,43 @@
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
     </script>
-    <!-- Google Identity Services (用於 Google 登入 + 讀取 Google Drive 資料夾圖檔) -->
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <!-- Google API Client (用於 Google Picker：視覺化選擇 Drive 資料夾) -->
     <script src="https://apis.google.com/js/api.js"></script>
+
+    <!-- Firebase：用於跨裝置同步「專案／圖頁／標記點」結構性資料(不含照片本體，照片仍只存裝置本機) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+        import {
+            getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut
+        } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+        import {
+            getFirestore, doc, setDoc, getDoc, deleteDoc, getDocs, collection, serverTimestamp
+        } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAPBpASzwP9Owx4VPd_24_djOQiupjXgJ0",
+            authDomain: "ycla-site-photo-mapper.firebaseapp.com",
+            projectId: "ycla-site-photo-mapper",
+            storageBucket: "ycla-site-photo-mapper.firebasestorage.app",
+            messagingSenderId: "527847349086",
+            appId: "1:527847349086:web:07a9374f77ab766f2c4dcf"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const fsDb = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+        provider.addScope("https://www.googleapis.com/auth/drive.readonly");
+        // 每次登入都讓使用者重新選擇帳號，避免多帳號裝置上誤用上一個登入的帳號
+        provider.setCustomParameters({ prompt: "select_account" });
+
+        window.FB = {
+            auth, db: fsDb, provider,
+            signInWithPopup, onAuthStateChanged, signOut, GoogleAuthProvider,
+            doc, setDoc, getDoc, deleteDoc, getDocs, collection, serverTimestamp
+        };
+        window.dispatchEvent(new Event("firebase-ready"));
+    </script>
     <style>
         /* 隱藏滾動條但保持功能 */
         .no-scrollbar::-webkit-scrollbar {
@@ -459,24 +492,16 @@
             </div>
 
             <div class="p-5 flex-1 overflow-y-auto no-scrollbar">
-                <!-- 狀態一：尚未登入 Google -->
+                <!-- 狀態一：尚未登入 Google (或需要重新授權 Drive 存取) -->
                 <div id="drive-step-signin">
-                    <!-- 嘗試靜默自動登入中 -->
-                    <div id="drive-silent-attempt" class="hidden flex flex-col items-center py-6">
-                        <div class="w-8 h-8 border-3 border-teal-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-                        <p class="text-xs text-slate-400">正在自動登入 Google...</p>
-                    </div>
-
-                    <div id="drive-signin-button-area">
-                        <p class="text-xs text-slate-400 leading-relaxed mb-4">
-                            登入 Google 帳號後，就能讀取你指定的 Google Drive 資料夾內的 PDF／圖片，直接匯入成本專案的圖頁。桌電上傳到 Drive 資料夾、手機登入同一個帳號就能匯入同一批檔案。
-                        </p>
-                        <button onclick="signInGoogleDrive()" class="w-full bg-white hover:bg-slate-100 text-slate-800 font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg">
-                            <i data-lucide="log-in" class="w-5 h-5"></i>
-                            <span>登入 Google 帳號</span>
-                        </button>
-                        <p id="drive-signin-error" class="hidden text-xs text-rose-400 mt-3"></p>
-                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                        登入 Google 帳號後，專案、圖頁、標記點位置會自動跨裝置同步；指定的 Google Drive 資料夾內的 PDF／圖片也能直接匯入成圖頁。
+                    </p>
+                    <button onclick="signInWithGoogle()" class="w-full bg-white hover:bg-slate-100 text-slate-800 font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg">
+                        <i data-lucide="log-in" class="w-5 h-5"></i>
+                        <span id="drive-signin-button-text">登入 Google 帳號</span>
+                    </button>
+                    <p id="drive-signin-error" class="hidden text-xs text-rose-400 mt-3"></p>
                 </div>
 
                 <!-- 狀態二：已登入，尚未設定此專案的資料夾 -->
@@ -784,6 +809,7 @@
 
                         store.put(project).onsuccess = function() {
                             showToast("專案名稱及編號更新成功！");
+                            pushProjectDoc(project);
 
                             if (editingProjectId === currentProjectId) {
                                 currentProjectName = name;
@@ -812,6 +838,7 @@
                     codeInput.value = "";
                     nameInput.value = "";
                     showToast("全新專案建立成功！");
+                    pushProjectDoc(newProject);
                     switchProject(newId);
                     toggleProjectModal();
                 };
@@ -869,6 +896,8 @@
         function deleteProject(id) {
             if (id === 'default-project') return;
             if (!confirm("確定要刪除此專案嗎？這將會一併清空該專案下的平面圖與所有定位照片！")) return;
+
+            deleteProjectDoc(id);
 
             const tx = db.transaction(["projects", "floorplans", "markers"], "readwrite");
             tx.objectStore("projects").delete(id);
@@ -1024,6 +1053,7 @@
                 if (proj) {
                     proj.lastFloorplanId = id;
                     pstore.put(proj);
+                    pushProjectDoc(proj);
                 }
             };
 
@@ -1136,6 +1166,7 @@
             floorplans.forEach((fp, idx) => {
                 fp.order = idx;
                 store.put(fp);
+                pushFloorplanDoc(fp);
             });
 
             renderFloorplanTabs();
@@ -1152,6 +1183,7 @@
             fp.name = newName.trim();
             const tx = db.transaction(["floorplans"], "readwrite");
             tx.objectStore("floorplans").put(fp);
+            pushFloorplanDoc(fp);
 
             renderFloorplanTabs();
             if (id === currentFloorplanId) {
@@ -1162,6 +1194,8 @@
         // 刪除圖頁(樓層)：會一併刪除該圖頁下所有拍照標記。即使是最後一個圖頁也可以刪除，刪除後會回到上傳畫面
         function deleteFloorplanSheet(id) {
             if (!confirm("確定要刪除這個圖頁嗎？此圖頁下所有拍照標記都會一併刪除，且無法復原。")) return;
+
+            deleteFloorplanDoc(currentProjectId, id);
 
             const tx = db.transaction(["floorplans", "markers"], "readwrite");
             tx.objectStore("floorplans").delete(id);
@@ -1210,6 +1244,7 @@
                     fp.numberingPrefix = prefix;
                     fp.numberingDigits = digits;
                     store.put(fp);
+                    pushFloorplanDoc(fp);
 
                     const local = floorplans.find(f => f.id === currentFloorplanId);
                     if (local) {
@@ -1277,6 +1312,7 @@
         function processSelectedFile(file, onDone, shouldSwitch) {
             onDone = onDone || function () {};
             if (shouldSwitch === undefined) shouldSwitch = true;
+            const driveFileId = file.driveFileId || null; // 來自 Drive 匯入時會帶有此屬性，供日後其他裝置自動補抓圖片
 
             if (file.type === "application/pdf") {
                 const fileReader = new FileReader();
@@ -1307,7 +1343,7 @@
                             chain = chain.then(() => renderPage(i));
                         }
                         chain.then(() => {
-                            commitFloorplanUpload(pageImages, file.name, shouldSwitch, onDone);
+                            commitFloorplanUpload(pageImages, file.name, shouldSwitch, onDone, driveFileId, file.type);
                         });
                     }).catch(err => {
                         showToast("無法解析 PDF 檔案，請確保檔案未損壞", "error");
@@ -1318,7 +1354,7 @@
             } else if (file.type.startsWith("image/")) {
                 const reader = new FileReader();
                 reader.onload = function(e) {
-                    compressFloorplanImage(e.target.result, file.name, shouldSwitch, onDone);
+                    compressFloorplanImage(e.target.result, file.name, shouldSwitch, onDone, driveFileId, file.type);
                 };
                 reader.readAsDataURL(file);
             } else {
@@ -1327,7 +1363,7 @@
             }
         }
 
-        function compressFloorplanImage(base64Str, filename, shouldSwitch, onDone) {
+        function compressFloorplanImage(base64Str, filename, shouldSwitch, onDone, driveFileId, sourceMimeType) {
             const img = new Image();
             img.onload = function() {
                 const maxDim = 3500;
@@ -1348,16 +1384,16 @@
                     canvas.height = height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, width, height);
-                    commitFloorplanUpload([canvas.toDataURL("image/jpeg", 0.85)], filename, shouldSwitch, onDone);
+                    commitFloorplanUpload([canvas.toDataURL("image/jpeg", 0.85)], filename, shouldSwitch, onDone, driveFileId, sourceMimeType);
                 } else {
-                    commitFloorplanUpload([base64Str], filename, shouldSwitch, onDone);
+                    commitFloorplanUpload([base64Str], filename, shouldSwitch, onDone, driveFileId, sourceMimeType);
                 }
             };
             img.src = base64Str;
         }
 
         // 將轉出的圖片寫入資料庫，每一頁(或每個檔案)各自建立一個新圖頁
-        function commitFloorplanUpload(pageImages, filename, shouldSwitch, onDone) {
+        function commitFloorplanUpload(pageImages, filename, shouldSwitch, onDone, driveFileId, sourceMimeType) {
             onDone = onDone || function () {};
 
             // 每一頁建立一個新圖頁(樓層)，預設名稱直接採用上傳的檔名，方便與圖紙對照
@@ -1369,6 +1405,9 @@
                 name: pageImages.length > 1 ? `${baseName}_p${idx + 1}` : baseName,
                 data: data,
                 filename: pageImages.length > 1 ? `${filename} (第${idx + 1}頁)` : filename,
+                driveFileId: driveFileId || null,
+                driveMimeType: sourceMimeType || null,
+                pageNumber: idx + 1, // PDF 來源時記錄是第幾頁，供其他裝置從 Drive 補抓時重新渲染同一頁
                 numberingPrefix: "",
                 numberingDigits: "2",
                 order: existingCount + idx,
@@ -1381,6 +1420,7 @@
 
             tx.oncomplete = function() {
                 floorplans = floorplans.concat(newSheets).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                newSheets.forEach(s => pushFloorplanDoc(s));
                 if (shouldSwitch) {
                     switchFloorplan(newSheets[0].id);
                 } else {
@@ -1391,25 +1431,35 @@
             };
         }
 
-        // --- 4.5 Google Drive 雲端匯入：桌電上傳到指定 Drive 資料夾，手機登入同一個 Google 帳號即可匯入同一批圖檔 ---
+        // --- 4.5 Google 登入 + 雲端匯入：統一用 Firebase Auth 取得「身份」(跨裝置同步用) 與「Drive 存取權杖」(讀取圖紙用) ---
 
-        // TODO: 換成你在 Google Cloud Console 建立的「Web 應用程式」OAuth 用戶端 ID
-        const GOOGLE_CLIENT_ID = "1018312829540-f5tpdcas8t3c0il9pkcro99kebpipmev.apps.googleusercontent.com";
-        const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
-
-        let googleAccessToken = null;
-        let googleTokenClient = null;
+        let currentUser = null; // Firebase 登入的使用者 (跨裝置同步靠這個身份)
+        let googleAccessToken = null; // Drive API 存取權杖，重新整理頁面後會消失，需要再次登入取得
         let driveFileListCache = []; // 目前資料夾下可匯入的檔案清單
+
+        function setupFirebaseAuthListener() {
+            window.FB.onAuthStateChanged(window.FB.auth, (user) => {
+                const wasSignedIn = !!currentUser;
+                currentUser = user || null;
+                if (document.getElementById('drive-import-modal') && !document.getElementById('drive-import-modal').classList.contains('hidden')) {
+                    updateDriveModalStep();
+                }
+                // 第一次偵測到「已登入」(包含重新整理後 Firebase 自動恢復登入狀態)，就嘗試從雲端拉取最新資料
+                if (currentUser && !wasSignedIn) {
+                    pullFirestoreData();
+                }
+            });
+        }
+
+        if (window.FB) {
+            setupFirebaseAuthListener();
+        } else {
+            window.addEventListener('firebase-ready', setupFirebaseAuthListener);
+        }
 
         function openDriveImportModal() {
             document.getElementById('drive-import-modal').classList.remove('hidden');
-
-            // 若之前成功登入過，先在背景嘗試靜默重新取得權杖，減少每次都要手動點「登入」
-            if (!googleAccessToken && localStorage.getItem('driveEverSignedIn') === 'true') {
-                attemptSilentGoogleSignIn();
-            } else {
-                updateDriveModalStep();
-            }
+            updateDriveModalStep();
         }
 
         function closeDriveImportModal() {
@@ -1422,10 +1472,10 @@
             const stepFolder = document.getElementById('drive-step-folder');
             const stepFiles = document.getElementById('drive-step-files');
 
-            document.getElementById('drive-silent-attempt').classList.add('hidden');
-            document.getElementById('drive-signin-button-area').classList.remove('hidden');
-
             if (!googleAccessToken) {
+                // 如果身份還在(只是 Drive 權杖過期/重整後消失)，按鈕文字改成「重新授權」更準確
+                document.getElementById('drive-signin-button-text').innerText =
+                    currentUser ? "重新授權 Google Drive 存取" : "登入 Google 帳號";
                 stepSignin.classList.remove('hidden');
                 stepFolder.classList.add('hidden');
                 stepFiles.classList.add('hidden');
@@ -1445,78 +1495,252 @@
             }
         }
 
-        // 在背景嘗試「靜默」重新登入(不跳出視窗)；如果失敗，退回顯示一般的登入按鈕
-        function attemptSilentGoogleSignIn() {
-            if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
-                updateDriveModalStep();
-                return;
-            }
-
-            document.getElementById('drive-silent-attempt').classList.remove('hidden');
-            document.getElementById('drive-signin-button-area').classList.add('hidden');
-
-            let settled = false;
-            const finish = (success) => {
-                if (settled) return;
-                settled = true;
-                if (!success) updateDriveModalStep();
-            };
-
-            if (!googleTokenClient) {
-                googleTokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: GOOGLE_CLIENT_ID,
-                    scope: DRIVE_SCOPE,
-                    callback: (response) => {
-                        if (response && response.access_token) {
-                            googleAccessToken = response.access_token;
-                            localStorage.setItem('driveEverSignedIn', 'true');
-                            updateDriveModalStep();
-                            finish(true);
-                        } else {
-                            finish(false);
-                        }
-                    },
-                    error_callback: () => finish(false)
-                });
-            }
-
-            googleTokenClient.requestAccessToken({ prompt: '' });
-            setTimeout(() => finish(false), 4000); // 保護機制：4 秒內沒回應就顯示一般登入按鈕
-        }
-
-        // 登入 Google 帳號並取得可呼叫 Drive API 的存取權杖 (Google Identity Services 隱式授權流程)
-        function signInGoogleDrive() {
-            if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+        // 登入 Google 帳號：一次取得 Firebase 身份(用於跨裝置同步)以及 Drive API 存取權杖(用於讀取圖紙)
+        function signInWithGoogle() {
+            if (!window.FB) {
                 showDriveError('drive-signin-error', "Google 登入元件尚未載入，請檢查網路連線後重試");
                 return;
             }
-            if (GOOGLE_CLIENT_ID.indexOf('請替換成') === 0) {
-                showDriveError('drive-signin-error', "尚未設定 Google OAuth Client ID，請聯絡管理者完成設定");
-                return;
-            }
 
-            if (!googleTokenClient) {
-                googleTokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: GOOGLE_CLIENT_ID,
-                    scope: DRIVE_SCOPE,
-                    callback: (response) => {
-                        if (response && response.access_token) {
-                            googleAccessToken = response.access_token;
-                            localStorage.setItem('driveEverSignedIn', 'true');
-                            updateDriveModalStep();
-                        } else {
-                            showDriveError('drive-signin-error', "Google 登入失敗，請重試");
-                        }
-                    }
+            window.FB.signInWithPopup(window.FB.auth, window.FB.provider)
+                .then((result) => {
+                    const credential = window.FB.GoogleAuthProvider.credentialFromResult(result);
+                    googleAccessToken = (credential && credential.accessToken) || null;
+                    currentUser = result.user;
+                    updateDriveModalStep();
+                    pullFirestoreData();
+                })
+                .catch((err) => {
+                    showDriveError('drive-signin-error', "Google 登入失敗，請重試 (" + (err && err.code || "未知錯誤") + ")");
                 });
-            }
-            googleTokenClient.requestAccessToken();
         }
 
         function showDriveError(elementId, message) {
             const el = document.getElementById(elementId);
             el.innerText = message;
             el.classList.remove('hidden');
+        }
+
+        // --- 4.6 Firestore 跨裝置同步：專案／圖頁／標記點「結構性資料」自動同步，照片本體仍只存裝置本機 ---
+
+        // IndexedDB 小工具：把 get/put 包成 Promise，方便在 async 函式中使用
+        function idbGetAsync(storeName, key) {
+            return new Promise((resolve, reject) => {
+                const req = db.transaction([storeName], "readonly").objectStore(storeName).get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+        function idbPutAsync(storeName, value) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([storeName], "readwrite");
+                tx.objectStore(storeName).put(value);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        // Firestore 路徑小工具：所有資料都存在 users/{uid} 底下，搭配安全規則確保每個人只能讀寫自己的資料
+        function fsProjectsCol() {
+            return window.FB.collection(window.FB.db, "users", currentUser.uid, "projects");
+        }
+        function fsProjectDoc(projectId) {
+            return window.FB.doc(window.FB.db, "users", currentUser.uid, "projects", projectId);
+        }
+        function fsFloorplansCol(projectId) {
+            return window.FB.collection(window.FB.db, "users", currentUser.uid, "projects", projectId, "floorplans");
+        }
+        function fsFloorplanDoc(projectId, floorplanId) {
+            return window.FB.doc(window.FB.db, "users", currentUser.uid, "projects", projectId, "floorplans", floorplanId);
+        }
+        function fsMarkersCol(projectId, floorplanId) {
+            return window.FB.collection(window.FB.db, "users", currentUser.uid, "projects", projectId, "floorplans", floorplanId, "markers");
+        }
+        function fsMarkerDoc(projectId, floorplanId, markerId) {
+            return window.FB.doc(window.FB.db, "users", currentUser.uid, "projects", projectId, "floorplans", floorplanId, "markers", markerId);
+        }
+
+        // --- 推送 (本機異動 → Firestore)：全部 best-effort，沒登入或離線時靜默失敗，不影響本機操作 ---
+        function pushProjectDoc(project) {
+            if (!currentUser) return;
+            window.FB.setDoc(fsProjectDoc(project.id), {
+                code: project.code || "",
+                name: project.name || "",
+                driveFolderId: project.driveFolderId || null,
+                lastFloorplanId: project.lastFloorplanId || null,
+                updatedAt: window.FB.serverTimestamp()
+            }, { merge: true }).catch(err => console.error("push project failed", err));
+        }
+
+        function deleteProjectDoc(projectId) {
+            if (!currentUser) return;
+            window.FB.deleteDoc(fsProjectDoc(projectId)).catch(err => console.error("delete project failed", err));
+        }
+
+        function pushFloorplanDoc(fp) {
+            if (!currentUser) return;
+            window.FB.setDoc(fsFloorplanDoc(fp.projectId, fp.id), {
+                name: fp.name || "",
+                filename: fp.filename || "",
+                driveFileId: fp.driveFileId || null,
+                driveMimeType: fp.driveMimeType || null,
+                pageNumber: fp.pageNumber || 1,
+                numberingPrefix: fp.numberingPrefix || "",
+                numberingDigits: fp.numberingDigits || "2",
+                order: fp.order || 0,
+                updatedAt: window.FB.serverTimestamp()
+            }, { merge: true }).catch(err => console.error("push floorplan failed", err));
+        }
+
+        function deleteFloorplanDoc(projectId, floorplanId) {
+            if (!currentUser) return;
+            window.FB.deleteDoc(fsFloorplanDoc(projectId, floorplanId)).catch(err => console.error("delete floorplan failed", err));
+        }
+
+        // 標記點只同步位置／角度／編號／備註，不含照片本體 (照片仍只存裝置本機)
+        function pushMarkerDoc(floorplanId, marker) {
+            if (!currentUser) return;
+            window.FB.setDoc(fsMarkerDoc(currentProjectId, floorplanId, String(marker.id)), {
+                x: marker.x,
+                y: marker.y,
+                angle: marker.angle,
+                label: marker.label || "",
+                memo: marker.memo || "",
+                updatedAt: window.FB.serverTimestamp()
+            }, { merge: true }).catch(err => console.error("push marker failed", err));
+        }
+
+        function deleteMarkerDoc(floorplanId, markerId) {
+            if (!currentUser) return;
+            window.FB.deleteDoc(fsMarkerDoc(currentProjectId, floorplanId, String(markerId))).catch(err => console.error("delete marker failed", err));
+        }
+
+        // --- 拉取 (Firestore → 本機 IndexedDB)：登入成功或重新整理後自動偵測到已登入時執行一次 ---
+        async function pullFirestoreData() {
+            if (!currentUser) return;
+            try {
+                const projectsSnap = await window.FB.getDocs(fsProjectsCol());
+                for (const pDoc of projectsSnap.docs) {
+                    await mergeRemoteProject(pDoc.id, pDoc.data());
+                }
+                loadProjectList();
+                loadCurrentProject();
+            } catch (err) {
+                console.error("pullFirestoreData failed", err);
+            }
+        }
+
+        async function mergeRemoteProject(projectId, data) {
+            const existing = await idbGetAsync("projects", projectId);
+            const merged = existing || { id: projectId };
+            merged.code = data.code || merged.code || "";
+            merged.name = data.name || merged.name || "未命名專案";
+            if (data.driveFolderId) merged.driveFolderId = data.driveFolderId;
+            if (data.lastFloorplanId && !merged.lastFloorplanId) merged.lastFloorplanId = data.lastFloorplanId;
+            await idbPutAsync("projects", merged);
+
+            const fpSnap = await window.FB.getDocs(fsFloorplansCol(projectId));
+            for (const fpDoc of fpSnap.docs) {
+                await mergeRemoteFloorplan(projectId, fpDoc.id, fpDoc.data());
+            }
+        }
+
+        async function mergeRemoteFloorplan(projectId, floorplanId, data) {
+            const existing = await idbGetAsync("floorplans", floorplanId);
+            const merged = existing || { id: floorplanId, data: null };
+            merged.projectId = projectId;
+            merged.name = data.name || merged.name || floorplanId;
+            merged.filename = data.filename || merged.filename || "";
+            merged.driveFileId = data.driveFileId || null;
+            merged.driveMimeType = data.driveMimeType || null;
+            merged.pageNumber = data.pageNumber || 1;
+            merged.numberingPrefix = data.numberingPrefix || "";
+            merged.numberingDigits = data.numberingDigits || "2";
+            merged.order = data.order || 0;
+            await idbPutAsync("floorplans", merged);
+
+            const markersSnap = await window.FB.getDocs(fsMarkersCol(projectId, floorplanId));
+            for (const mDoc of markersSnap.docs) {
+                await mergeRemoteMarker(floorplanId, mDoc.id, mDoc.data());
+            }
+
+            // 本機還沒有這張圖的圖片內容，且目前持有有效的 Drive 權杖時，在背景自動補抓圖片(不需要使用者手動再匯入一次)
+            if (!merged.data && merged.driveFileId && googleAccessToken) {
+                fetchAndCacheFloorplanImage(merged);
+            }
+        }
+
+        async function mergeRemoteMarker(floorplanId, markerIdStr, data) {
+            const numericId = parseInt(markerIdStr, 10);
+            if (!numericId) return;
+            const compositeId = `${floorplanId}-${numericId}`;
+            const existing = await idbGetAsync("markers", compositeId);
+            const merged = existing || { compositeId, photo: null };
+            merged.id = numericId;
+            merged.floorplanId = floorplanId;
+            merged.projectId = currentProjectId;
+            merged.x = data.x;
+            merged.y = data.y;
+            merged.angle = data.angle;
+            merged.label = data.label || String(numericId);
+            merged.memo = data.memo || "";
+            await idbPutAsync("markers", merged);
+        }
+
+        // 圖頁本機沒有圖片內容時，從 Drive 重新下載並 (若為 PDF) 重新渲染同一頁，補上圖片快取
+        function fetchAndCacheFloorplanImage(fp) {
+            const url = `https://www.googleapis.com/drive/v3/files/${fp.driveFileId}?alt=media`;
+            fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+                .then(res => {
+                    if (!res.ok) throw new Error("無法從 Drive 補抓圖片");
+                    return res.blob();
+                })
+                .then(blob => {
+                    if (fp.driveMimeType === "application/pdf") {
+                        return renderDrivePdfPageToBase64(blob, fp.pageNumber || 1);
+                    }
+                    return blobToBase64(blob);
+                })
+                .then(base64 => {
+                    fp.data = base64;
+                    const tx = db.transaction(["floorplans"], "readwrite");
+                    tx.objectStore("floorplans").put(fp);
+
+                    const local = floorplans.find(f => f.id === fp.id);
+                    if (local) local.data = base64;
+
+                    if (fp.id === currentFloorplanId) {
+                        document.getElementById('floorplan-image').src = base64;
+                        document.getElementById('upload-overlay').classList.add('hidden');
+                        mapLoaded = true;
+                    }
+                    renderFloorplanTabs();
+                })
+                .catch(err => console.error("fetchAndCacheFloorplanImage failed", err));
+        }
+
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function renderDrivePdfPageToBase64(blob, pageNumber) {
+            return blob.arrayBuffer().then(buf => {
+                return pdfjsLib.getDocument(new Uint8Array(buf)).promise.then(pdf => {
+                    return pdf.getPage(pageNumber).then(page => {
+                        const viewport = page.getViewport({ scale: 2.0 });
+                        const canvas = document.createElement('canvas');
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        const ctx = canvas.getContext('2d');
+                        return page.render({ canvasContext: ctx, viewport: viewport }).promise.then(() => canvas.toDataURL("image/jpeg", 0.8));
+                    });
+                });
+            });
         }
 
         // 從貼上的 Google Drive 資料夾連結中解析出資料夾 ID
@@ -1552,6 +1776,7 @@
                 if (project) {
                     project.driveFolderId = folderId;
                     store.put(project);
+                    pushProjectDoc(project);
                 }
             };
 
@@ -1671,6 +1896,7 @@
         }
 
         // 透過 Drive API 下載檔案內容，包裝成 File 物件後丟進現有的圖頁上傳流程
+        // (額外把來源的 driveFileId 掛在 File 物件上，這樣建立出的圖頁才能記住自己的圖片是從哪個 Drive 檔案來的，供其他裝置之後自動補抓)
         function fetchDriveFileAsFile(file) {
             const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
             return fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
@@ -1678,7 +1904,11 @@
                     if (!res.ok) throw new Error(`下載「${file.name}」失敗`);
                     return res.blob();
                 })
-                .then(blob => new File([blob], file.name, { type: file.mimeType }));
+                .then(blob => {
+                    const fileObj = new File([blob], file.name, { type: file.mimeType });
+                    fileObj.driveFileId = file.id;
+                    return fileObj;
+                });
         }
 
         function importSingleDriveFile(file) {
@@ -2078,6 +2308,7 @@
                 renderMarkerOnCanvas(newMarker);
                 updateMarkersListUI();
                 updateNextLabelPreview();
+                pushMarkerDoc(currentFloorplanId, newMarker);
                 showToast(`定位標籤 ${labelStr} 新增完成並關聯照片`);
                 openDetailModal(newMarker.id);
                 setMode('pan');
@@ -2331,6 +2562,7 @@
 
                         updateMarkersListUI();
                         updateNextLabelPreview();
+                        pushMarkerDoc(currentFloorplanId, marker);
                         showToast(`已儲存標記點修改`);
                         closeDetailModal();
                     };
@@ -2346,6 +2578,8 @@
             if (!existing) return;
             const compositeId = existing.compositeId;
             const labelStr = existing.label || String(editingMarkerId).padStart(2, '0');
+
+            deleteMarkerDoc(currentFloorplanId, editingMarkerId);
 
             const tx = db.transaction(["markers"], "readwrite");
             const store = tx.objectStore("markers");
@@ -2371,6 +2605,7 @@
 
             markers.forEach(m => {
                 store.delete(m.compositeId);
+                deleteMarkerDoc(currentFloorplanId, m.id);
 
                 const markerDiv = document.getElementById(`map-marker-${m.id}`);
                 if (markerDiv) markerDiv.remove();
