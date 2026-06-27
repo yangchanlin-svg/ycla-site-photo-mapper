@@ -191,7 +191,7 @@
         </div>
 
         <!-- 右側主畫布區域 (平面圖操作台) -->
-        <div class="flex-1 relative overflow-hidden canvas-bg flex items-center justify-center">
+        <div id="canvas-area" class="flex-1 relative overflow-hidden canvas-bg flex items-center justify-center">
 
             <!-- 圖頁/樓層切換籤：一個專案可有多張平面圖，各自獨立標記與編號 -->
             <div id="floorplan-tabs" class="absolute top-0 inset-x-0 z-[25] bg-slate-950/95 border-b border-slate-800 flex items-center gap-1.5 px-2 py-2 no-print">
@@ -199,6 +199,15 @@
                 <button onclick="triggerFileInput()" class="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-400 flex items-center justify-center border border-slate-700" title="新增圖頁／樓層">
                     <i data-lucide="plus" class="w-4 h-4"></i>
                 </button>
+            </div>
+
+            <!-- 拖曳提示遮罩：無論目前有沒有底圖，把檔案拖到整個畫布上都會新增圖頁 -->
+            <div id="drag-hint-overlay" class="hidden absolute inset-0 bg-teal-950/85 border-4 border-dashed border-teal-400 z-[26] flex items-center justify-center pointer-events-none no-print">
+                <div class="text-center text-teal-100">
+                    <i data-lucide="upload-cloud" class="w-12 h-12 mx-auto mb-2"></i>
+                    <p class="text-base font-bold">放開以新增圖頁</p>
+                    <p class="text-xs text-teal-200/80 mt-1">可一次拖入多個 PDF 或圖片，各自轉成獨立圖頁</p>
+                </div>
             </div>
 
             <!-- 遮罩：未載入平面圖時顯示 (內建拖曳 Drop Zone 感應) -->
@@ -610,35 +619,34 @@
         }
 
         // --- 2.5 拖曳上傳 (Drag & Drop) 事件設定與動畫回饋 ---
+        // 無論目前是否已經載入底圖，整個畫布區域都可以拖曳檔案進來新增圖頁
         function setupDragAndDrop() {
-            const dropZone = document.getElementById('drop-zone');
-            const uploadOverlay = document.getElementById('upload-overlay');
-            if (!dropZone || !uploadOverlay) return;
+            const canvasArea = document.getElementById('canvas-area');
+            const dragHint = document.getElementById('drag-hint-overlay');
+            if (!canvasArea || !dragHint) return;
+
+            let dragCounter = 0; // 處理子元素互相觸發 dragenter/dragleave 造成的閃爍
 
             // 阻擋瀏覽器預設開啟檔案動作
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-                uploadOverlay.addEventListener(eventName, preventDefaults, false);
+                canvasArea.addEventListener(eventName, preventDefaults, false);
                 document.body.addEventListener(eventName, preventDefaults, false);
             });
 
-            // 當檔案拖曳進入區域，啟動醒目提示動畫
-            ['dragenter', 'dragover'].forEach(eventName => {
-                uploadOverlay.addEventListener(eventName, () => {
-                    dropZone.classList.add('border-teal-500', 'bg-slate-900', 'scale-[1.03]');
-                    dropZone.classList.remove('border-slate-800', 'bg-slate-950');
-                }, false);
-            });
+            canvasArea.addEventListener('dragenter', () => {
+                dragCounter++;
+                dragHint.classList.remove('hidden');
+            }, false);
 
-            // 當檔案離開區域或已放置，回歸一般狀態
-            ['dragleave', 'drop'].forEach(eventName => {
-                uploadOverlay.addEventListener(eventName, () => {
-                    dropZone.classList.remove('border-teal-500', 'bg-slate-900', 'scale-[1.03]');
-                    dropZone.classList.add('border-slate-800', 'bg-slate-950');
-                }, false);
-            });
+            canvasArea.addEventListener('dragleave', () => {
+                dragCounter = Math.max(0, dragCounter - 1);
+                if (dragCounter === 0) dragHint.classList.add('hidden');
+            }, false);
 
-            // 處理置放後的檔案上傳 (支援一次拖入多個檔案)
-            uploadOverlay.addEventListener('drop', (e) => {
+            // 處理置放後的檔案上傳 (支援一次拖入多個檔案；不論目前是否已有底圖，一律視為新增圖頁)
+            canvasArea.addEventListener('drop', (e) => {
+                dragCounter = 0;
+                dragHint.classList.add('hidden');
                 const files = e.dataTransfer.files;
                 if (files && files.length > 0) {
                     pendingUploadMode = 'new';
