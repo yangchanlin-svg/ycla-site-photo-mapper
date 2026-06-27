@@ -73,7 +73,7 @@
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
                 </h1>
-                <div class="text-xs text-slate-400 flex items-center mt-0.5" id="project-title-display">
+                <div class="text-sm text-slate-400 flex items-center mt-0.5" id="project-title-display">
                     <!-- JS 動態載入專案編號與名稱 -->
                     載入中...
                 </div>
@@ -947,8 +947,8 @@
         function updateHeaderDisplay() {
             const display = document.getElementById('project-title-display');
             display.innerHTML = `
-                <span class="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded text-[10px] font-mono mr-1.5 border border-slate-700">${currentProjectCode}</span>
-                <span class="truncate font-semibold text-slate-300 text-xs">${currentProjectName}</span>
+                <span class="bg-slate-800 text-slate-300 px-2 py-0.5 rounded text-xs font-mono mr-1.5 border border-slate-700">${currentProjectCode}</span>
+                <span class="truncate font-semibold text-slate-300 text-sm">${currentProjectName}</span>
             `;
         }
 
