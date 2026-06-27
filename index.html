@@ -24,6 +24,8 @@
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
     </script>
+    <!-- Google Identity Services (用於 Google 登入 + 讀取 Google Drive 資料夾圖檔) -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
         /* 隱藏滾動條但保持功能 */
         .no-scrollbar::-webkit-scrollbar {
@@ -78,6 +80,11 @@
             </div>
         </div>
         <div class="flex items-center space-x-2">
+            <!-- Google Drive 雲端匯入按鈕：桌電上傳到 Drive，手機登入同一個 Google 帳號即可匯入 -->
+            <button onclick="openDriveImportModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 border border-slate-700">
+                <i data-lucide="cloud-download" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">雲端匯入</span>
+            </button>
             <!-- 專案管理按鈕 -->
             <button onclick="toggleProjectModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 border border-slate-700">
                 <i data-lucide="folder-git-2" class="w-4 h-4"></i>
@@ -452,6 +459,72 @@
         </div>
     </div>
 
+    <!-- 彈出視窗：Google Drive 雲端匯入 (桌電上傳到 Drive 資料夾，手機登入同帳號即可匯入同一批圖檔) -->
+    <div id="drive-import-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-40 no-print">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div class="bg-slate-950 px-5 py-4 border-b border-slate-800 flex items-center justify-between flex-shrink-0">
+                <div class="flex items-center space-x-2 text-teal-400">
+                    <i data-lucide="cloud-download" class="w-5 h-5"></i>
+                    <h3 class="font-bold text-white text-sm">從 Google Drive 匯入圖頁</h3>
+                </div>
+                <button onclick="closeDriveImportModal()" class="text-slate-400 hover:text-white transition">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="p-5 flex-1 overflow-y-auto no-scrollbar">
+                <!-- 狀態一：尚未登入 Google -->
+                <div id="drive-step-signin">
+                    <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                        登入 Google 帳號後，就能讀取你指定的 Google Drive 資料夾內的 PDF／圖片，直接匯入成本專案的圖頁。桌電上傳到 Drive 資料夾、手機登入同一個帳號就能匯入同一批檔案。
+                    </p>
+                    <button onclick="signInGoogleDrive()" class="w-full bg-white hover:bg-slate-100 text-slate-800 font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg">
+                        <i data-lucide="log-in" class="w-5 h-5"></i>
+                        <span>登入 Google 帳號</span>
+                    </button>
+                    <p id="drive-signin-error" class="hidden text-xs text-rose-400 mt-3"></p>
+                </div>
+
+                <!-- 狀態二：已登入，尚未設定此專案的資料夾 -->
+                <div id="drive-step-folder" class="hidden">
+                    <p class="text-xs text-emerald-400 mb-3 flex items-center gap-1">
+                        <i data-lucide="check-circle" class="w-3.5 h-3.5"></i>已登入 Google
+                    </p>
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5">貼上此專案要連結的 Drive 資料夾連結</label>
+                    <input type="text" id="drive-folder-input" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono" placeholder="https://drive.google.com/drive/folders/xxxxxxxx">
+                    <p class="text-[11px] text-slate-500 mt-1.5">在 Google Drive 開啟資料夾，複製網址列連結貼到這裡即可，兩台裝置要連結同一個資料夾才能互通。</p>
+                    <button onclick="saveDriveFolderLink()" class="w-full mt-4 bg-teal-600 hover:bg-teal-500 text-white font-bold py-2.5 rounded-xl transition">
+                        儲存並讀取資料夾內容
+                    </button>
+                    <p id="drive-folder-error" class="hidden text-xs text-rose-400 mt-3"></p>
+                </div>
+
+                <!-- 狀態三：已設定資料夾，顯示檔案清單 -->
+                <div id="drive-step-files" class="hidden">
+                    <div class="flex items-center justify-between mb-3">
+                        <p class="text-xs text-slate-400 truncate flex-1 mr-2" id="drive-folder-display"></p>
+                        <div class="flex items-center gap-1.5 flex-shrink-0">
+                            <button onclick="loadDriveFileList()" class="text-teal-400 hover:text-teal-300 p-1.5 rounded transition" title="重新整理列表">
+                                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                            </button>
+                            <button onclick="changeDriveFolder()" class="text-slate-400 hover:text-white p-1.5 rounded transition" title="更換資料夾">
+                                <i data-lucide="folder-cog" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="drive-file-list" class="space-y-2 mb-3">
+                        <!-- 動態載入 Drive 檔案清單 -->
+                    </div>
+
+                    <button onclick="importAllDriveFiles()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-2.5 rounded-xl transition text-sm flex items-center justify-center gap-1.5">
+                        <i data-lucide="download" class="w-4 h-4"></i>全部匯入成圖頁
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 全螢幕報告書預覽畫面 -->
     <div id="report-view-container" class="hidden absolute inset-0 bg-slate-950 text-slate-900 z-50 overflow-y-auto p-4 md:p-8">
 
@@ -521,6 +594,7 @@
         let currentProjectId = "default-project";
         let currentProjectName = "預設專案";
         let currentProjectCode = "PJ-001";
+        let currentProjectDriveFolderId = null; // 此專案連結的 Google Drive 資料夾 ID (雲端匯入用)
 
         let mapLoaded = false;
         let markers = []; // 當前圖頁(樓層)拍照點陣列 { id, label, x, y, angle, photo, memo }
@@ -825,6 +899,7 @@
             }
             floorplans = [];
             currentFloorplanId = null;
+            currentProjectDriveFolderId = null;
             renderFloorplanTabs();
             resetCanvasState();
             loadCurrentProject();
@@ -887,6 +962,7 @@
                 if (proj) {
                     currentProjectName = proj.name || "未命名專案";
                     currentProjectCode = proj.code || "PJ-01";
+                    currentProjectDriveFolderId = proj.driveFolderId || null;
                     updateHeaderDisplay();
 
                     migrateLegacyFloorplanIfNeeded(proj, function() {
@@ -1407,6 +1483,217 @@
                 showToast(pageImages.length > 1 ? `已新增 ${pageImages.length} 張圖頁(每頁PDF轉出一張)` : "圖頁新增成功！");
                 onDone();
             };
+        }
+
+        // --- 4.5 Google Drive 雲端匯入：桌電上傳到指定 Drive 資料夾，手機登入同一個 Google 帳號即可匯入同一批圖檔 ---
+
+        // TODO: 換成你在 Google Cloud Console 建立的「Web 應用程式」OAuth 用戶端 ID
+        const GOOGLE_CLIENT_ID = "請替換成你的-OAuth-CLIENT-ID.apps.googleusercontent.com";
+        const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+        let googleAccessToken = null;
+        let googleTokenClient = null;
+        let driveFileListCache = []; // 目前資料夾下可匯入的檔案清單
+
+        function openDriveImportModal() {
+            document.getElementById('drive-import-modal').classList.remove('hidden');
+            updateDriveModalStep();
+        }
+
+        function closeDriveImportModal() {
+            document.getElementById('drive-import-modal').classList.add('hidden');
+        }
+
+        // 依目前登入狀態與是否已設定資料夾，切換彈窗顯示的步驟
+        function updateDriveModalStep() {
+            const stepSignin = document.getElementById('drive-step-signin');
+            const stepFolder = document.getElementById('drive-step-folder');
+            const stepFiles = document.getElementById('drive-step-files');
+
+            if (!googleAccessToken) {
+                stepSignin.classList.remove('hidden');
+                stepFolder.classList.add('hidden');
+                stepFiles.classList.add('hidden');
+                return;
+            }
+            stepSignin.classList.add('hidden');
+
+            const folderId = currentProjectDriveFolderId;
+            if (!folderId) {
+                stepFolder.classList.remove('hidden');
+                stepFiles.classList.add('hidden');
+            } else {
+                stepFolder.classList.add('hidden');
+                stepFiles.classList.remove('hidden');
+                document.getElementById('drive-folder-display').innerText = `資料夾 ID：${folderId}`;
+                loadDriveFileList();
+            }
+        }
+
+        // 登入 Google 帳號並取得可呼叫 Drive API 的存取權杖 (Google Identity Services 隱式授權流程)
+        function signInGoogleDrive() {
+            if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+                showDriveError('drive-signin-error', "Google 登入元件尚未載入，請檢查網路連線後重試");
+                return;
+            }
+            if (GOOGLE_CLIENT_ID.indexOf('請替換成') === 0) {
+                showDriveError('drive-signin-error', "尚未設定 Google OAuth Client ID，請聯絡管理者完成設定");
+                return;
+            }
+
+            if (!googleTokenClient) {
+                googleTokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: GOOGLE_CLIENT_ID,
+                    scope: DRIVE_SCOPE,
+                    callback: (response) => {
+                        if (response && response.access_token) {
+                            googleAccessToken = response.access_token;
+                            updateDriveModalStep();
+                        } else {
+                            showDriveError('drive-signin-error', "Google 登入失敗，請重試");
+                        }
+                    }
+                });
+            }
+            googleTokenClient.requestAccessToken();
+        }
+
+        function showDriveError(elementId, message) {
+            const el = document.getElementById(elementId);
+            el.innerText = message;
+            el.classList.remove('hidden');
+        }
+
+        // 從貼上的 Google Drive 資料夾連結中解析出資料夾 ID
+        function extractDriveFolderId(link) {
+            const patterns = [/\/folders\/([a-zA-Z0-9_-]+)/, /[?&]id=([a-zA-Z0-9_-]+)/];
+            for (const pattern of patterns) {
+                const match = link.match(pattern);
+                if (match) return match[1];
+            }
+            // 如果使用者直接貼資料夾 ID 而非完整連結
+            if (/^[a-zA-Z0-9_-]{10,}$/.test(link.trim())) return link.trim();
+            return null;
+        }
+
+        // 儲存此專案連結的 Drive 資料夾 ID (存在 project 記錄上，換裝置只要登入同帳號即可讀到同一個資料夾)
+        function saveDriveFolderLink() {
+            const link = document.getElementById('drive-folder-input').value.trim();
+            const folderId = extractDriveFolderId(link);
+            if (!folderId) {
+                showDriveError('drive-folder-error', "無法解析資料夾連結，請確認貼上的是完整的 Drive 資料夾網址");
+                return;
+            }
+
+            currentProjectDriveFolderId = folderId;
+            const tx = db.transaction(["projects"], "readwrite");
+            const store = tx.objectStore("projects");
+            store.get(currentProjectId).onsuccess = function(event) {
+                const project = event.target.result;
+                if (project) {
+                    project.driveFolderId = folderId;
+                    store.put(project);
+                }
+            };
+
+            updateDriveModalStep();
+        }
+
+        function changeDriveFolder() {
+            currentProjectDriveFolderId = null;
+            document.getElementById('drive-folder-input').value = "";
+            updateDriveModalStep();
+        }
+
+        // 呼叫 Drive API 列出資料夾內可匯入的 PDF / 圖片檔案
+        function loadDriveFileList() {
+            const folderId = currentProjectDriveFolderId;
+            if (!folderId || !googleAccessToken) return;
+
+            const listEl = document.getElementById('drive-file-list');
+            listEl.innerHTML = `<p class="text-xs text-slate-500 text-center py-4">讀取中...</p>`;
+
+            const query = encodeURIComponent(
+                `'${folderId}' in parents and trashed = false and (mimeType = 'application/pdf' or mimeType contains 'image/')`
+            );
+            const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,modifiedTime)&orderBy=name&pageSize=100`;
+
+            fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+                .then(res => {
+                    if (res.status === 401) {
+                        googleAccessToken = null;
+                        throw new Error("登入已過期，請重新登入 Google");
+                    }
+                    if (!res.ok) throw new Error("讀取資料夾失敗，請確認帳號有此資料夾的存取權限");
+                    return res.json();
+                })
+                .then(data => {
+                    driveFileListCache = data.files || [];
+                    renderDriveFileList();
+                })
+                .catch(err => {
+                    listEl.innerHTML = `<p class="text-xs text-rose-400 text-center py-4">${err.message}</p>`;
+                    if (!googleAccessToken) updateDriveModalStep();
+                });
+        }
+
+        function renderDriveFileList() {
+            const listEl = document.getElementById('drive-file-list');
+            listEl.innerHTML = "";
+
+            if (driveFileListCache.length === 0) {
+                listEl.innerHTML = `<p class="text-xs text-slate-500 text-center py-4">這個資料夾目前沒有可匯入的 PDF 或圖片</p>`;
+                return;
+            }
+
+            driveFileListCache.forEach(file => {
+                const row = document.createElement('div');
+                row.className = "flex items-center justify-between bg-slate-950 border border-slate-800 rounded-lg px-3 py-2";
+                row.innerHTML = `
+                    <div class="flex items-center gap-2 overflow-hidden">
+                        <i data-lucide="${file.mimeType === 'application/pdf' ? 'file-text' : 'image'}" class="w-4 h-4 text-teal-400 flex-shrink-0"></i>
+                        <span class="text-xs text-slate-200 truncate">${file.name}</span>
+                    </div>
+                    <button class="text-teal-400 hover:text-teal-300 text-xs font-bold flex-shrink-0 ml-2">匯入</button>
+                `;
+                row.querySelector('button').addEventListener('click', () => importSingleDriveFile(file));
+                listEl.appendChild(row);
+            });
+
+            lucide.createIcons();
+        }
+
+        // 透過 Drive API 下載檔案內容，包裝成 File 物件後丟進現有的圖頁上傳流程
+        function fetchDriveFileAsFile(file) {
+            const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
+            return fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+                .then(res => {
+                    if (!res.ok) throw new Error(`下載「${file.name}」失敗`);
+                    return res.blob();
+                })
+                .then(blob => new File([blob], file.name, { type: file.mimeType }));
+        }
+
+        function importSingleDriveFile(file) {
+            showToast(`正在匯入「${file.name}」...`);
+            fetchDriveFileAsFile(file).then(fileObj => {
+                pendingUploadMode = 'new';
+                processFileBatch([fileObj]);
+                closeDriveImportModal();
+            }).catch(err => showToast(err.message, "error"));
+        }
+
+        function importAllDriveFiles() {
+            if (driveFileListCache.length === 0) return;
+            showToast(`正在匯入 ${driveFileListCache.length} 個檔案...`);
+
+            Promise.all(driveFileListCache.map(f => fetchDriveFileAsFile(f)))
+                .then(fileObjs => {
+                    pendingUploadMode = 'new';
+                    processFileBatch(fileObjs);
+                    closeDriveImportModal();
+                })
+                .catch(err => showToast(err.message, "error"));
         }
 
         function onFloorplanLoaded() {
