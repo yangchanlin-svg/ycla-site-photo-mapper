@@ -107,7 +107,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[10px] font-mono text-slate-500" id="app-version-display">v27</span>
+                    <span class="text-[10px] font-mono text-slate-500" id="app-version-display">v28</span>
                 </h1>
             </div>
         </div>
@@ -2454,12 +2454,12 @@
 
             div.innerHTML = `
                 <div class="marker-arrow transition-transform duration-200" style="transform: rotate(${marker.angle}deg);">
-                    <svg width="240" height="240" viewBox="0 0 100 100" class="fill-rose-500 drop-shadow-lg">
-                        <polygon points="50,5 25,45 42,45 42,95 58,95 58,45 75,45" />
+                    <svg width="150" height="100" viewBox="0 0 100 70" class="fill-rose-500 drop-shadow-lg">
+                        <polygon points="50,4 10,66 90,66" />
                     </svg>
                 </div>
-                <!-- 標籤文字容器：放在箭頭下方，不與箭頭重疊 -->
-                <div class="label-circle mt-1 px-3 py-2 min-w-[72px] h-[72px] bg-rose-600 hover:bg-rose-500 border-4 border-white rounded-full flex items-center justify-center text-2xl font-black text-white shadow-md select-none transition truncate max-w-[140px]">
+                <!-- 標籤文字容器：緊貼在箭頭下方，呈現屋頂+圓圈的標誌造型 -->
+                <div class="label-circle -mt-6 px-3 py-2 min-w-[72px] h-[72px] bg-rose-600 hover:bg-rose-500 border-4 border-white rounded-full flex items-center justify-center text-2xl font-black text-white shadow-md select-none transition truncate max-w-[140px]">
                     ${marker.label}
                 </div>
             `;
