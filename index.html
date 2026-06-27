@@ -109,7 +109,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v36</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v37</span>
                 </h1>
             </div>
         </div>
@@ -964,6 +964,7 @@
             if (!confirm("確定要刪除此專案嗎？這將會一併清空該專案下的平面圖與所有定位照片！")) return;
 
             deleteProjectDoc(id);
+            cascadeDeleteProjectFromFirestore(id);
 
             const tx = db.transaction(["projects", "floorplans", "markers"], "readwrite");
             tx.objectStore("projects").delete(id);
@@ -1262,6 +1263,7 @@
             if (!confirm("確定要刪除這個圖頁嗎？此圖頁下所有拍照標記都會一併刪除，且無法復原。")) return;
 
             deleteFloorplanDoc(currentProjectId, id);
+            cascadeDeleteMarkerDocsForFloorplan(currentProjectId, id);
 
             const tx = db.transaction(["floorplans", "markers"], "readwrite");
             tx.objectStore("floorplans").delete(id);
@@ -1655,6 +1657,22 @@
                 tx.onerror = () => reject(tx.error);
             });
         }
+        function idbDeleteAsync(storeName, key) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([storeName], "readwrite");
+                tx.objectStore(storeName).delete(key);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+        function idbGetAllByIndexAsync(storeName, indexName, value) {
+            return new Promise((resolve, reject) => {
+                const idx = db.transaction([storeName], "readonly").objectStore(storeName).index(indexName);
+                const req = idx.getAll(IDBKeyRange.only(value));
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
 
         // Firestore 路徑小工具：所有資料都存在 users/{uid} 底下，搭配安全規則確保每個人只能讀寫自己的資料
         function fsProjectsCol() {
@@ -1711,6 +1729,27 @@
         function deleteFloorplanDoc(projectId, floorplanId) {
             if (!currentUser) return;
             window.FB.deleteDoc(fsFloorplanDoc(projectId, floorplanId)).catch(err => console.error("delete floorplan failed", err));
+        }
+
+        // 刪除圖頁時，連同雲端上這個圖頁底下所有標記點一併刪除，確保其他裝置下次同步時也會跟著消失
+        function cascadeDeleteMarkerDocsForFloorplan(projectId, floorplanId) {
+            if (!currentUser) return;
+            window.FB.getDocs(fsMarkersCol(projectId, floorplanId))
+                .then(snap => snap.forEach(d => window.FB.deleteDoc(d.ref).catch(() => {})))
+                .catch(err => console.error("cascade delete markers failed", err));
+        }
+
+        // 刪除整個專案時，連同雲端上所有圖頁與標記點一併刪除
+        function cascadeDeleteProjectFromFirestore(projectId) {
+            if (!currentUser) return;
+            window.FB.getDocs(fsFloorplansCol(projectId))
+                .then(fpSnap => {
+                    fpSnap.forEach(fpDoc => {
+                        cascadeDeleteMarkerDocsForFloorplan(projectId, fpDoc.id);
+                        window.FB.deleteDoc(fpDoc.ref).catch(() => {});
+                    });
+                })
+                .catch(err => console.error("cascade delete project floorplans failed", err));
         }
 
         // 標記點同步位置／角度／編號／備註，以及照片在 Drive 上的檔案 ID (照片本體仍快取在裝置本機，只是多存一個雲端參照供其他裝置補抓)
@@ -1839,8 +1878,19 @@
             await idbPutAsync("projects", merged);
 
             const fpSnap = await window.FB.getDocs(fsFloorplansCol(projectId));
+            const remoteFloorplanIds = new Set(fpSnap.docs.map(d => d.id));
             for (const fpDoc of fpSnap.docs) {
                 await mergeRemoteFloorplan(projectId, fpDoc.id, fpDoc.data());
+            }
+
+            // 本機有、但雲端已經沒有的圖頁，代表在其他裝置被刪除了，本機也一併清除(含底下的標記)
+            const localFloorplans = await idbGetAllByIndexAsync("floorplans", "projectId", projectId);
+            for (const fp of localFloorplans) {
+                if (!remoteFloorplanIds.has(fp.id)) {
+                    await idbDeleteAsync("floorplans", fp.id);
+                    const orphanMarkers = await idbGetAllByIndexAsync("markers", "floorplanId", fp.id);
+                    for (const m of orphanMarkers) await idbDeleteAsync("markers", m.compositeId);
+                }
             }
         }
 
@@ -1859,8 +1909,17 @@
             await idbPutAsync("floorplans", merged);
 
             const markersSnap = await window.FB.getDocs(fsMarkersCol(projectId, floorplanId));
+            const remoteMarkerIds = new Set(markersSnap.docs.map(d => d.id));
             for (const mDoc of markersSnap.docs) {
                 await mergeRemoteMarker(floorplanId, mDoc.id, mDoc.data());
+            }
+
+            // 本機有、但雲端已經沒有的標記，代表在其他裝置被刪除了，本機也一併清除
+            const localMarkers = await idbGetAllByIndexAsync("markers", "floorplanId", floorplanId);
+            for (const m of localMarkers) {
+                if (!remoteMarkerIds.has(String(m.id))) {
+                    await idbDeleteAsync("markers", m.compositeId);
+                }
             }
 
             // 本機還沒有這張圖的圖片內容，且目前持有有效的 Drive 權杖時，在背景自動補抓圖片(不需要使用者手動再匯入一次)
