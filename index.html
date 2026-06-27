@@ -998,8 +998,13 @@
                     createdAt: Date.now()
                 };
 
-                const wtx = db.transaction(["floorplans", "markers"], "readwrite");
+                const wtx = db.transaction(["projects", "floorplans", "markers"], "readwrite");
                 wtx.objectStore("floorplans").add(sheet);
+
+                // 清除專案上的舊版底圖欄位，避免日後刪除此圖頁後，下次開啟又被誤判成「尚未搬移」而重新長出來
+                delete proj.floorplanData;
+                delete proj.filename;
+                wtx.objectStore("projects").put(proj);
 
                 // 搬移舊版以 projectId 索引的標記到新版 floorplanId 結構
                 const markerIdx = wtx.objectStore("markers").index("projectId");
