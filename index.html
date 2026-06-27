@@ -107,7 +107,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[10px] font-mono text-slate-500" id="app-version-display">v24</span>
+                    <span class="text-[10px] font-mono text-slate-500" id="app-version-display">v25</span>
                 </h1>
             </div>
         </div>
@@ -2044,6 +2044,18 @@
         function updateTransform() {
             const container = document.getElementById('pan-container');
             container.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+            applyMarkerCounterScale();
+        }
+
+        // 標記點圖層是平面圖縮放容器的子元素，縮小平面圖時標記點也會跟著變小；
+        // 這裡反向抵銷縮放比例，讓標記點箭頭與編號在任何縮放等級下都維持固定的螢幕大小，方便辨識
+        function applyMarkerCounterScale() {
+            const layer = document.getElementById('markers-layer');
+            if (!layer) return;
+            const counterScale = 1 / scale;
+            Array.from(layer.children).forEach(el => {
+                el.style.transform = `translate(-50%, -50%) scale(${counterScale})`;
+            });
         }
 
         function handleWheel(e) {
@@ -2448,9 +2460,11 @@
             const layer = document.getElementById('markers-layer');
             const div = document.createElement('div');
             div.id = `map-marker-${marker.id}`;
-            div.className = "absolute pointer-events-auto cursor-pointer transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center";
+            div.className = "absolute pointer-events-auto cursor-pointer flex flex-col items-center justify-center";
             div.style.left = `${marker.x * 100}%`;
             div.style.top = `${marker.y * 100}%`;
+            div.style.transformOrigin = "center";
+            div.style.transform = `translate(-50%, -50%) scale(${1 / scale})`;
 
             div.innerHTML = `
                 <div class="marker-arrow transition-transform duration-200" style="transform: rotate(${marker.angle}deg);">
