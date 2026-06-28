@@ -144,7 +144,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v46</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v47</span>
                 </h1>
             </div>
         </div>
@@ -2725,7 +2725,12 @@
 
         // 若已登入 Google，把標記的照片上傳到 Drive，讓其他裝置之後也能補抓看到 (未登入時靜默跳過，不影響本機使用)
         function uploadMarkerPhotoIfSignedIn(marker) {
-            if (!currentUser || !googleAccessToken || !marker.photo) return;
+            if (!currentUser || !marker.photo) return;
+            if (!googleAccessToken) {
+                // Firebase 登入狀態會在重新整理/重開 App 後自動恢復，但 Drive 存取權杖不會，需要使用者重新授權一次
+                showToast("照片僅存於本機，尚未同步雲端：請點「雲端匯入」重新授權 Google Drive 存取", "warning");
+                return;
+            }
             const filename = `${marker.label || marker.id}_${Date.now()}.jpg`;
             uploadPhotoToDrive(marker.photo, filename)
                 .then(fileId => {
@@ -2733,7 +2738,10 @@
                     idbPutAsync("markers", marker);
                     pushMarkerDoc(marker.floorplanId, marker);
                 })
-                .catch(err => console.error("upload marker photo failed", err));
+                .catch(err => {
+                    console.error("upload marker photo failed", err);
+                    showToast(`照片雲端上傳失敗：${err.message}（已存於本機，可再試一次或檢查登入狀態）`, "warning");
+                });
         }
 
         function updateExistingMarkerPhoto(id, photoData) {
