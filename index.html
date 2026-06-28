@@ -82,11 +82,7 @@
         .touch-action-none {
             touch-action: none;
         }
-        /* 報告書列印樣式優化：改成 A4 橫式，直式照片才有足夠寬度完整顯示 */
-        @page {
-            size: A4 landscape;
-            margin: 10mm;
-        }
+        /* 報告書列印樣式：A4 尺寸依使用者選擇的橫式/直式動態切換，見 #dynamic-page-style */
         @media print {
             body {
                 background: white !important;
@@ -110,12 +106,29 @@
                 page-break-after: auto;
             }
         }
-        /* 預覽畫面下，讓每個 .report-page 看起來像一張獨立的 A4 橫式紙張 */
+        /* 預覽畫面下，讓每個 .report-page 看起來像一張獨立的 A4 紙張(預設橫式) */
         .report-page {
             max-width: 277mm;
             min-height: 190mm;
             margin-left: auto;
             margin-right: auto;
+        }
+        /* 直式報告：頁面尺寸對調，照片網格改成 2 欄較合適 */
+        #report-pages-container.orientation-portrait .report-page {
+            max-width: 190mm;
+            min-height: 277mm;
+        }
+        #report-pages-container.orientation-portrait .photo-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+        #report-pages-container.orientation-portrait .floorplan-index-img {
+            max-height: 230mm !important;
+        }
+    </style>
+    <style id="dynamic-page-style">
+        @page {
+            size: A4 landscape;
+            margin: 10mm;
         }
     </style>
 </head>
@@ -131,7 +144,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v44</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v45</span>
                 </h1>
             </div>
         </div>
@@ -663,6 +676,10 @@
                 </div>
             </div>
             <div class="flex items-center space-x-2">
+                <div class="flex items-center gap-1 bg-slate-800 rounded-lg p-1 mr-1">
+                    <button id="report-orientation-landscape" onclick="setReportOrientation('landscape')" class="px-2.5 py-1.5 rounded-md text-xs font-bold transition">橫式</button>
+                    <button id="report-orientation-portrait" onclick="setReportOrientation('portrait')" class="px-2.5 py-1.5 rounded-md text-xs font-bold transition">直式</button>
+                </div>
                 <button onclick="window.print()" class="bg-teal-600 hover:bg-teal-500 text-white font-bold px-4 py-2 rounded-lg text-xs transition flex items-center space-x-1.5 shadow-md shadow-teal-950/50">
                     <i data-lucide="printer" class="w-4 h-4"></i>
                     <span>開始列印 / 另存 PDF</span>
@@ -3201,7 +3218,7 @@
                 <p class="text-xs text-gray-400 mb-4">圖頁：${fp.name}（共 ${markersForFp.length} 個拍照標記點）</p>
                 <div class="relative border border-gray-300 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center p-4">
                     <div class="relative inline-block mx-auto report-floorplan-wrapper">
-                        <img src="${fp.data || ''}" alt="${fp.name}" class="max-h-[150mm] max-w-full block h-auto w-auto object-contain">
+                        <img src="${fp.data || ''}" alt="${fp.name}" class="floorplan-index-img max-h-[150mm] max-w-full block h-auto w-auto object-contain">
                         <div class="absolute inset-0 pointer-events-none report-markers-layer"></div>
                     </div>
                 </div>
@@ -3233,7 +3250,7 @@
             gridBlock.innerHTML = `<h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-6">${zhNum2}-2、${fp.name} － 現場影像記錄明細表</h3>`;
 
             const grid = document.createElement('div');
-            grid.className = "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6";
+            grid.className = "photo-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6";
 
             if (markersForFp.length === 0) {
                 grid.innerHTML = `
@@ -3275,6 +3292,20 @@
             return section;
         }
 
+        let reportOrientation = 'landscape';
+
+        function setReportOrientation(mode) {
+            reportOrientation = mode;
+
+            document.getElementById('dynamic-page-style').textContent = `@page { size: A4 ${mode}; margin: 10mm; }`;
+            document.getElementById('report-pages-container').classList.toggle('orientation-portrait', mode === 'portrait');
+
+            const activeClass = "px-2.5 py-1.5 rounded-md text-xs font-bold transition bg-teal-600 text-white";
+            const inactiveClass = "px-2.5 py-1.5 rounded-md text-xs font-bold transition text-slate-300 hover:text-white";
+            document.getElementById('report-orientation-landscape').className = mode === 'landscape' ? activeClass : inactiveClass;
+            document.getElementById('report-orientation-portrait').className = mode === 'portrait' ? activeClass : inactiveClass;
+        }
+
         async function enterReportMode() {
             if (floorplans.length === 0) return showToast("請先上傳至少一張平面圖紙以導出報告", "warning");
 
@@ -3308,6 +3339,7 @@
                 pageDivs[pageDivs.length - 1].appendChild(buildReportFooterHtml());
             }
 
+            setReportOrientation(reportOrientation);
             document.getElementById('report-view-container').classList.remove('hidden');
         }
 
