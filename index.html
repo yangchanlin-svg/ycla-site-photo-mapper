@@ -98,6 +98,24 @@
             .print-page-break {
                 page-break-before: always;
             }
+            /* 每個 .report-page 對應實際印出的一頁紙，列印時拿掉畫面預覽用的卡片外觀(陰影/邊框/間距) */
+            .report-page {
+                box-shadow: none !important;
+                border: none !important;
+                border-radius: 0 !important;
+                margin: 0 !important;
+                page-break-after: always;
+            }
+            .report-page:last-child {
+                page-break-after: auto;
+            }
+        }
+        /* 預覽畫面下，讓每個 .report-page 看起來像一張獨立的 A4 橫式紙張 */
+        .report-page {
+            max-width: 277mm;
+            min-height: 190mm;
+            margin-left: auto;
+            margin-right: auto;
         }
     </style>
 </head>
@@ -113,7 +131,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v43</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v44</span>
                 </h1>
             </div>
         </div>
@@ -655,38 +673,8 @@
             </div>
         </div>
 
-        <!-- 實際可列印報告書本體 (白底)：A4 橫式版面 -->
-        <div class="max-w-[277mm] mx-auto bg-white border border-gray-200 rounded-lg shadow-2xl p-8 md:p-12 min-h-[190mm] flex flex-col justify-between">
-
-            <!-- 報告封面/主標題 -->
-            <div>
-                <div class="border-b-4 border-slate-800 pb-6 mb-8">
-                    <div class="flex justify-between items-start">
-                        <div>
-                            <span class="text-xs font-bold text-teal-600 uppercase tracking-widest bg-teal-50 px-2.5 py-1 rounded">SITE INSPECTION REPORT</span>
-                            <h2 class="text-2xl font-black text-slate-900 mt-2" id="report-project-name">工地查核拍照定位報告書</h2>
-                            <p class="text-sm text-slate-600 mt-1 flex items-center gap-1" id="report-project-code-display">
-                                專案編號：<span class="font-mono font-semibold" id="report-project-code">無</span>
-                            </p>
-                            <p class="text-xs text-gray-400 mt-1" id="report-date-display">報告日期：2026/06/27</p>
-                        </div>
-                        <div class="text-right text-xs text-slate-400">
-                            <p class="font-bold text-slate-700 text-sm">建築師事務所 / 工地監造組</p>
-                            <p class="mt-1">由工地定位拍照 APP 自動產生</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 各圖頁(樓層)報告區塊：由 JS 依 floorplans 清單動態產生，每個圖頁各自一組「平面索引圖＋影像明細表」 -->
-                <div id="report-sections-container"></div>
-            </div>
-
-            <!-- 報告頁尾 -->
-            <div class="mt-12 pt-6 border-t border-gray-200 flex justify-between items-center text-xs text-gray-400">
-                <p>YCLA-工地相片定位標籤系統 (建築師工作流改善解決方案)</p>
-                <p class="font-bold text-slate-500">簽章核可：___________________</p>
-            </div>
-        </div>
+        <!-- 報告書內容：每個 .report-page 在畫面上跟列印時都各自呈現為一張獨立的 A4 橫式頁面，方便預覽時就能看出實際分頁 -->
+        <div id="report-pages-container" class="space-y-8"></div>
     </div>
 
 
@@ -3168,9 +3156,41 @@
         }
 
         // 建立單一圖頁(樓層)的報告區塊 DOM（平面索引圖 + 影像記錄明細表）
+        // 報告封面區塊 (顯示在第一頁最上方)
+        function buildReportCoverHtml(reportDateStr) {
+            const div = document.createElement('div');
+            div.className = "border-b-4 border-slate-800 pb-6 mb-8";
+            div.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div>
+                        <span class="text-xs font-bold text-teal-600 uppercase tracking-widest bg-teal-50 px-2.5 py-1 rounded">SITE INSPECTION REPORT</span>
+                        <h2 class="text-2xl font-black text-slate-900 mt-2">${currentProjectName}</h2>
+                        <p class="text-sm text-slate-600 mt-1 flex items-center gap-1">專案編號：<span class="font-mono font-semibold">${currentProjectCode}</span></p>
+                        <p class="text-xs text-gray-400 mt-1">報告日期：${reportDateStr}</p>
+                    </div>
+                    <div class="text-right text-xs text-slate-400">
+                        <p class="font-bold text-slate-700 text-sm">建築師事務所 / 工地監造組</p>
+                        <p class="mt-1">由工地定位拍照 APP 自動產生</p>
+                    </div>
+                </div>
+            `;
+            return div;
+        }
+
+        // 報告頁尾簽章區塊 (顯示在最後一頁最下方)
+        function buildReportFooterHtml() {
+            const div = document.createElement('div');
+            div.className = "mt-12 pt-6 border-t border-gray-200 flex justify-between items-center text-xs text-gray-400";
+            div.innerHTML = `
+                <p>YCLA-工地相片定位標籤系統 (建築師工作流改善解決方案)</p>
+                <p class="font-bold text-slate-500">簽章核可：___________________</p>
+            `;
+            return div;
+        }
+
+        // 單一圖頁(樓層)的報告內容：平面索引圖 + 影像記錄明細表，不含分頁/頁面外觀(由呼叫端包成一張 .report-page)
         function buildReportSection(fp, markersForFp, sectionIndex) {
             const section = document.createElement('div');
-            if (sectionIndex > 1) section.classList.add('print-page-break');
 
             const zhNum = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][sectionIndex - 1] || String(sectionIndex);
 
@@ -3258,23 +3278,34 @@
         async function enterReportMode() {
             if (floorplans.length === 0) return showToast("請先上傳至少一張平面圖紙以導出報告", "warning");
 
-            document.getElementById('report-project-name').innerText = currentProjectName;
-            document.getElementById('report-project-code').innerText = currentProjectCode;
-
             const date = new Date();
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            document.getElementById('report-date-display').innerText = `報告日期：${year}/${month}/${day}`;
+            const reportDateStr = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
 
-            const container = document.getElementById('report-sections-container');
-            container.innerHTML = "";
+            const pagesContainer = document.getElementById('report-pages-container');
+            pagesContainer.innerHTML = "";
 
+            const pageDivs = [];
             let sectionIndex = 0;
             for (const fp of floorplans) {
                 sectionIndex++;
                 const markersForFp = await getMarkersForFloorplan(fp.id);
-                container.appendChild(buildReportSection(fp, markersForFp, sectionIndex));
+                const sectionContent = buildReportSection(fp, markersForFp, sectionIndex);
+
+                const pageDiv = document.createElement('div');
+                pageDiv.className = "report-page bg-white border border-gray-200 rounded-lg shadow-2xl p-8 md:p-12 flex flex-col justify-between";
+
+                const topArea = document.createElement('div');
+                if (sectionIndex === 1) topArea.appendChild(buildReportCoverHtml(reportDateStr));
+                topArea.appendChild(sectionContent);
+                pageDiv.appendChild(topArea);
+
+                pagesContainer.appendChild(pageDiv);
+                pageDivs.push(pageDiv);
+            }
+
+            // 簽章頁尾固定放在最後一頁的底部
+            if (pageDivs.length > 0) {
+                pageDivs[pageDivs.length - 1].appendChild(buildReportFooterHtml());
             }
 
             document.getElementById('report-view-container').classList.remove('hidden');
