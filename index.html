@@ -146,7 +146,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v55</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v56</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -611,7 +611,7 @@
                 <!-- 狀態一：尚未登入 Google (或需要重新授權 Drive 存取) -->
                 <div id="drive-step-signin">
                     <p class="text-xs text-slate-400 leading-relaxed mb-4">
-                        登入 Google 帳號後，專案、圖頁、標記點位置會自動跨裝置同步；指定的 Google Drive 資料夾內的 PDF／圖片也能直接匯入成圖頁。
+                        登入 Google 帳號後，專案、圖頁、標記點位置會自動跨裝置同步；指定的 Google Drive 資料夾底下的「01_plan」子資料夾內的 PDF／圖片可以直接匯入成圖頁，現場照片則會自動上傳到「02_Current photos」子資料夾。
                     </p>
                     <button onclick="signInWithGoogle()" class="w-full bg-white hover:bg-slate-100 text-slate-800 font-bold py-3 px-4 rounded-xl transition flex items-center justify-center space-x-2 shadow-lg">
                         <i data-lucide="log-in" class="w-5 h-5"></i>
@@ -638,7 +638,7 @@
 
                     <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5">貼上此專案要連結的 Drive 資料夾連結</label>
                     <input type="text" id="drive-folder-input" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono" placeholder="https://drive.google.com/drive/folders/xxxxxxxx">
-                    <p class="text-[11px] text-slate-500 mt-1.5">兩台裝置要連結同一個資料夾才能互通。</p>
+                    <p class="text-[11px] text-slate-500 mt-1.5">兩台裝置要連結同一個資料夾才能互通。連結後會自動在裡面建立(或沿用既有的)「01_plan」「02_Current photos」子資料夾。</p>
                     <button onclick="saveDriveFolderLink()" class="w-full mt-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl transition border border-slate-700">
                         儲存連結
                     </button>
@@ -1990,50 +1990,86 @@
 
         // --- 拍照標記的照片上傳到 Drive / 從 Drive 補抓，讓其他裝置也能看到照片 ---
 
-        // 取得(或建立)目前專案用來存放拍照記錄的 Drive 資料夾，建立後記住 ID 供下次直接使用
-        // 確保此專案有一個 Drive 資料夾可放拍照記錄；若使用者從未透過「雲端匯入」手動連結資料夾，
-        // 也會自動在雲端硬碟建立一個專用資料夾，讓已登入的使用者不需要額外設定就能跨裝置同步照片。
+        // 每個專案的 Drive 資料夾底下，固定用這兩個子資料夾名稱：平面圖放這裡、現場照片放那裡，
+        // 方便使用者直接在雲端硬碟手動建立/瀏覽，不用每個專案各自取名
+        const DRIVE_PLAN_FOLDER_NAME = "01_plan";
+        const DRIVE_PHOTOS_FOLDER_NAME = "02_Current photos";
+
+        // 在 parentFolderId 底下找一個叫 folderName 的資料夾；如果使用者已經手動建立過就直接沿用，沒有才新建
+        function findOrCreateSubfolder(parentFolderId, folderName) {
+            const escapedName = folderName.replace(/'/g, "\\'");
+            const query = encodeURIComponent(
+                `'${parentFolderId}' in parents and name = '${escapedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
+            );
+            const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives`;
+
+            return fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+                .then(res => { if (!res.ok) throw new Error(`查詢資料夾「${folderName}」失敗`); return res.json(); })
+                .then(data => {
+                    if (data.files && data.files.length > 0) return data.files[0].id;
+                    return fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: folderName, mimeType: 'application/vnd.google-apps.folder', parents: [parentFolderId] })
+                    })
+                    .then(res => { if (!res.ok) throw new Error(`建立資料夾「${folderName}」失敗`); return res.json(); })
+                    .then(folder => folder.id);
+                });
+        }
+
+        // 確保此專案已連結 Drive 資料夾；若使用者從未透過「雲端匯入」手動連結資料夾，
+        // 也會自動在雲端硬碟建立一個專用資料夾，讓已登入的使用者不需要額外設定就能跨裝置同步
+        function ensureProjectDriveFolderId(project) {
+            if (project.driveFolderId) return Promise.resolve(project.driveFolderId);
+            if (!googleAccessToken) return Promise.reject(new Error("未登入"));
+
+            return fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: `YCLA工地照片_${project.name || project.code || project.id}`,
+                    mimeType: 'application/vnd.google-apps.folder'
+                })
+            })
+            .then(res => { if (!res.ok) throw new Error('建立專案 Drive 資料夾失敗'); return res.json(); })
+            .then(folder => {
+                project.driveFolderId = folder.id;
+                currentProjectDriveFolderId = folder.id;
+                pushProjectDoc(project);
+                return folder.id;
+            });
+        }
+
+        // 取得(或建立)此專案放「平面圖」的子資料夾(固定命名 01_plan)
+        function ensurePlanFolderId(project) {
+            if (project.planFolderId) return Promise.resolve(project.planFolderId);
+            if (!googleAccessToken) return Promise.reject(new Error("未登入"));
+
+            return ensureProjectDriveFolderId(project)
+                .then(parentFolderId => findOrCreateSubfolder(parentFolderId, DRIVE_PLAN_FOLDER_NAME))
+                .then(id => {
+                    project.planFolderId = id;
+                    const tx = db.transaction(["projects"], "readwrite");
+                    tx.objectStore("projects").put(project);
+                    pushProjectDoc(project);
+                    return id;
+                });
+        }
+
+        // 取得(或建立)此專案放「現場照片」的子資料夾(固定命名 02_Current photos)
         function ensurePhotosFolderId(project) {
             if (project.photosFolderId) return Promise.resolve(project.photosFolderId);
             if (!googleAccessToken) return Promise.reject(new Error("未登入"));
 
-            const ensureParentFolder = project.driveFolderId
-                ? Promise.resolve(project.driveFolderId)
-                : fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
-                      method: 'POST',
-                      headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                          name: `YCLA工地照片_${project.name || project.code || project.id}`,
-                          mimeType: 'application/vnd.google-apps.folder'
-                      })
-                  })
-                  .then(res => { if (!res.ok) throw new Error('建立專案 Drive 資料夾失敗'); return res.json(); })
-                  .then(folder => {
-                      project.driveFolderId = folder.id;
-                      currentProjectDriveFolderId = folder.id;
-                      pushProjectDoc(project);
-                      return folder.id;
-                  });
-
-            return ensureParentFolder.then(parentFolderId =>
-                fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
-                    method: 'POST',
-                    headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: '拍照記錄',
-                        mimeType: 'application/vnd.google-apps.folder',
-                        parents: [parentFolderId]
-                    })
-                })
-                .then(res => { if (!res.ok) throw new Error('建立 Drive 拍照資料夾失敗'); return res.json(); })
-                .then(folder => {
-                    project.photosFolderId = folder.id;
+            return ensureProjectDriveFolderId(project)
+                .then(parentFolderId => findOrCreateSubfolder(parentFolderId, DRIVE_PHOTOS_FOLDER_NAME))
+                .then(id => {
+                    project.photosFolderId = id;
                     const tx = db.transaction(["projects"], "readwrite");
                     tx.objectStore("projects").put(project);
                     pushProjectDoc(project);
-                    return folder.id;
-                })
-            );
+                    return id;
+                });
         }
 
         // 把拍照標記的照片(base64)上傳到 Drive，回傳新檔案的 ID
@@ -2309,6 +2345,9 @@
                 const project = event.target.result;
                 if (project) {
                     project.driveFolderId = folderId;
+                    // 換了根資料夾，之前解析出的子資料夾 ID 就不適用了，清掉讓系統重新尋找/建立「01_plan」「02_Current photos」
+                    project.planFolderId = null;
+                    project.photosFolderId = null;
                     store.put(project);
                     pushProjectDoc(project);
                 }
@@ -2371,21 +2410,23 @@
             }
         }
 
-        // 呼叫 Drive API 列出資料夾內可匯入的 PDF / 圖片檔案
+        // 呼叫 Drive API 列出「01_plan」子資料夾內可匯入的 PDF / 圖片檔案(平面圖固定放這裡)
         function loadDriveFileList() {
-            const folderId = currentProjectDriveFolderId;
-            if (!folderId || !googleAccessToken) return;
+            if (!currentProjectDriveFolderId || !googleAccessToken) return;
 
             const listEl = document.getElementById('drive-file-list');
             listEl.innerHTML = `<p class="text-xs text-slate-500 text-center py-4">讀取中...</p>`;
 
-            const query = encodeURIComponent(
-                `'${folderId}' in parents and trashed = false and (mimeType = 'application/pdf' or mimeType contains 'image/')`
-            );
-            // supportsAllDrives / includeItemsFromAllDrives / corpora=allDrives：讓「共用雲端硬碟」裡的資料夾也能正常讀取，不只「我的雲端硬碟」
-            const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,modifiedTime)&orderBy=name&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives`;
-
-            fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+            idbGetAsync("projects", currentProjectId)
+                .then(project => ensurePlanFolderId(project))
+                .then(planFolderId => {
+                    const query = encodeURIComponent(
+                        `'${planFolderId}' in parents and trashed = false and (mimeType = 'application/pdf' or mimeType contains 'image/')`
+                    );
+                    // supportsAllDrives / includeItemsFromAllDrives / corpora=allDrives：讓「共用雲端硬碟」裡的資料夾也能正常讀取，不只「我的雲端硬碟」
+                    const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,modifiedTime)&orderBy=name&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives`;
+                    return fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } });
+                })
                 .then(res => {
                     if (res.status === 401) {
                         googleAccessToken = null;
