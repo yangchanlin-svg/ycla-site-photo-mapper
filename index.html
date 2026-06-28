@@ -226,7 +226,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v60</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v61</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -308,7 +308,7 @@
             </div>
 
             <!-- 可摺疊區：自動編碼規則 + 標記列表 + 底圖資訊。手機預設收合，桌面永遠展開 -->
-            <div id="sidebar-collapsible" class="flex flex-col max-h-0 opacity-0 overflow-hidden transition-all duration-300 ease-out md:max-h-none md:opacity-100 md:overflow-visible md:flex-1">
+            <div id="sidebar-collapsible" class="flex flex-col max-h-0 opacity-0 overflow-hidden transition-all duration-300 ease-out md:max-h-none md:opacity-100 md:overflow-y-auto md:flex-1 no-scrollbar">
 
                 <!-- 智慧自動編碼規則設定區 -->
                 <div class="p-4 border-b border-slate-800 flex-shrink-0 bg-slate-900/30">
