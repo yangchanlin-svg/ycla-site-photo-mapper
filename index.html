@@ -144,7 +144,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v45</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v46</span>
                 </h1>
             </div>
         </div>
@@ -1811,27 +1811,49 @@
         // --- 拍照標記的照片上傳到 Drive / 從 Drive 補抓，讓其他裝置也能看到照片 ---
 
         // 取得(或建立)目前專案用來存放拍照記錄的 Drive 資料夾，建立後記住 ID 供下次直接使用
+        // 確保此專案有一個 Drive 資料夾可放拍照記錄；若使用者從未透過「雲端匯入」手動連結資料夾，
+        // 也會自動在雲端硬碟建立一個專用資料夾，讓已登入的使用者不需要額外設定就能跨裝置同步照片。
         function ensurePhotosFolderId(project) {
             if (project.photosFolderId) return Promise.resolve(project.photosFolderId);
-            if (!project.driveFolderId || !googleAccessToken) return Promise.reject(new Error("尚未連結 Drive 資料夾或未登入"));
+            if (!googleAccessToken) return Promise.reject(new Error("未登入"));
 
-            return fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: '拍照記錄',
-                    mimeType: 'application/vnd.google-apps.folder',
-                    parents: [project.driveFolderId]
+            const ensureParentFolder = project.driveFolderId
+                ? Promise.resolve(project.driveFolderId)
+                : fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+                      method: 'POST',
+                      headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                          name: `YCLA工地照片_${project.name || project.code || project.id}`,
+                          mimeType: 'application/vnd.google-apps.folder'
+                      })
+                  })
+                  .then(res => { if (!res.ok) throw new Error('建立專案 Drive 資料夾失敗'); return res.json(); })
+                  .then(folder => {
+                      project.driveFolderId = folder.id;
+                      currentProjectDriveFolderId = folder.id;
+                      pushProjectDoc(project);
+                      return folder.id;
+                  });
+
+            return ensureParentFolder.then(parentFolderId =>
+                fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: '拍照記錄',
+                        mimeType: 'application/vnd.google-apps.folder',
+                        parents: [parentFolderId]
+                    })
                 })
-            })
-            .then(res => { if (!res.ok) throw new Error('建立 Drive 拍照資料夾失敗'); return res.json(); })
-            .then(folder => {
-                project.photosFolderId = folder.id;
-                const tx = db.transaction(["projects"], "readwrite");
-                tx.objectStore("projects").put(project);
-                pushProjectDoc(project);
-                return folder.id;
-            });
+                .then(res => { if (!res.ok) throw new Error('建立 Drive 拍照資料夾失敗'); return res.json(); })
+                .then(folder => {
+                    project.photosFolderId = folder.id;
+                    const tx = db.transaction(["projects"], "readwrite");
+                    tx.objectStore("projects").put(project);
+                    pushProjectDoc(project);
+                    return folder.id;
+                })
+            );
         }
 
         // 把拍照標記的照片(base64)上傳到 Drive，回傳新檔案的 ID
@@ -2703,7 +2725,7 @@
 
         // 若已登入 Google，把標記的照片上傳到 Drive，讓其他裝置之後也能補抓看到 (未登入時靜默跳過，不影響本機使用)
         function uploadMarkerPhotoIfSignedIn(marker) {
-            if (!currentUser || !currentProjectDriveFolderId || !marker.photo) return;
+            if (!currentUser || !googleAccessToken || !marker.photo) return;
             const filename = `${marker.label || marker.id}_${Date.now()}.jpg`;
             uploadPhotoToDrive(marker.photo, filename)
                 .then(fileId => {
