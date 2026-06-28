@@ -226,7 +226,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v58</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v59</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -3605,14 +3605,12 @@
             return div;
         }
 
-        // 單一圖頁(樓層)的報告內容：平面索引圖 + 影像記錄明細表，不含分頁/頁面外觀(由呼叫端包成一張 .report-page)
-        function buildReportSection(fp, markersForFp, sectionIndex) {
-            const section = document.createElement('div');
-
+        // 平面索引圖頁的內容：每個圖頁(樓層)固定獨立成一頁，不跟照片明細表共用同一張紙，
+        // 才能讓畫面預覽的每張卡片真的維持 A4 橫式/直式的比例，不會因為內容疊太多而被撐高變形
+        function buildReportMapPage(fp, markersForFp, sectionIndex) {
             const zhNum = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][sectionIndex - 1] || String(sectionIndex);
 
             const mapBlock = document.createElement('div');
-            mapBlock.className = "mb-10 mt-2";
             mapBlock.innerHTML = `
                 <h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-1">${zhNum}、${fp.name} － 相片定位平面索引圖</h3>
                 <p class="text-xs text-gray-400 mb-4">圖頁：${fp.name}（共 ${markersForFp.length} 個拍照標記點）</p>
@@ -3644,22 +3642,29 @@
                 markersLayer.appendChild(div);
             });
 
+            return mapBlock;
+        }
+
+        // 照片明細表的一頁內容：只放一批(預設最多 6 張)標記點的照片卡片，超過就由呼叫端分成下一頁，
+        // 確保每張紙的照片數量是固定可控的，不會因為標記點太多就把單一頁面的高度撐爆
+        function buildReportPhotoGridPage(fp, markersChunk, sectionIndex, pageNum, totalPages) {
+            const zhNum = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][sectionIndex - 1] || String(sectionIndex);
+            const pageSuffix = totalPages > 1 ? `（第 ${pageNum}/${totalPages} 頁）` : '';
+
             const gridBlock = document.createElement('div');
-            gridBlock.className = "mt-8 mb-4";
-            const zhNum2 = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][sectionIndex - 1] || String(sectionIndex);
-            gridBlock.innerHTML = `<h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-6">${zhNum2}-2、${fp.name} － 現場影像記錄明細表</h3>`;
+            gridBlock.innerHTML = `<h3 class="text-base font-bold text-slate-800 border-l-4 border-teal-500 pl-2 mb-6">${zhNum}-2、${fp.name} － 現場影像記錄明細表${pageSuffix}</h3>`;
 
             const grid = document.createElement('div');
             grid.className = "photo-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6";
 
-            if (markersForFp.length === 0) {
+            if (markersChunk.length === 0) {
                 grid.innerHTML = `
                     <div class="col-span-full text-center py-10 text-gray-400 bg-gray-50 border border-dashed border-gray-200 rounded-lg">
                         此圖頁目前未標記任何照片。
                     </div>
                 `;
             } else {
-                markersForFp.forEach(m => {
+                markersChunk.forEach(m => {
                     const block = document.createElement('div');
                     block.className = "border border-gray-300 rounded-lg overflow-hidden flex flex-col bg-white shadow-sm break-inside-avoid";
                     block.innerHTML = `
@@ -3686,11 +3691,11 @@
                 });
             }
             gridBlock.appendChild(grid);
-
-            section.appendChild(mapBlock);
-            section.appendChild(gridBlock);
-            return section;
+            return gridBlock;
         }
+
+        // 每頁照片明細表最多放幾張，超過就分頁；3 欄版面下 2 排剛好 6 張，視覺上跟 A4 橫式頁面的留白比例最接近
+        const REPORT_PHOTOS_PER_PAGE = 6;
 
         let reportOrientation = 'landscape';
 
@@ -3720,18 +3725,36 @@
             for (const fp of floorplans) {
                 sectionIndex++;
                 const markersForFp = await getMarkersForFloorplan(fp.id);
-                const sectionContent = buildReportSection(fp, markersForFp, sectionIndex);
 
-                const pageDiv = document.createElement('div');
-                pageDiv.className = "report-page bg-white border border-gray-200 rounded-lg shadow-2xl p-8 md:p-12 flex flex-col justify-between";
-
+                // 第一頁：平面索引圖獨立成一張紙，不跟照片明細表擠在同一頁，畫面預覽才能維持正確的紙張比例
+                const mapContent = buildReportMapPage(fp, markersForFp, sectionIndex);
+                const mapPageDiv = document.createElement('div');
+                mapPageDiv.className = "report-page bg-white border border-gray-200 rounded-lg shadow-2xl p-8 md:p-12 flex flex-col justify-between";
                 const topArea = document.createElement('div');
                 if (sectionIndex === 1) topArea.appendChild(buildReportCoverHtml(reportDateStr));
-                topArea.appendChild(sectionContent);
-                pageDiv.appendChild(topArea);
+                topArea.appendChild(mapContent);
+                mapPageDiv.appendChild(topArea);
+                pagesContainer.appendChild(mapPageDiv);
+                pageDivs.push(mapPageDiv);
 
-                pagesContainer.appendChild(pageDiv);
-                pageDivs.push(pageDiv);
+                // 接著：照片明細表依張數分頁，每頁最多 REPORT_PHOTOS_PER_PAGE 張
+                const chunks = markersForFp.length > 0
+                    ? Array.from(
+                          { length: Math.ceil(markersForFp.length / REPORT_PHOTOS_PER_PAGE) },
+                          (_, i) => markersForFp.slice(i * REPORT_PHOTOS_PER_PAGE, (i + 1) * REPORT_PHOTOS_PER_PAGE)
+                      )
+                    : [[]]; // 沒有照片也至少呈現一頁「未標記任何照片」的提示
+
+                chunks.forEach((chunk, idx) => {
+                    const gridContent = buildReportPhotoGridPage(fp, chunk, sectionIndex, idx + 1, chunks.length);
+                    const gridPageDiv = document.createElement('div');
+                    gridPageDiv.className = "report-page bg-white border border-gray-200 rounded-lg shadow-2xl p-8 md:p-12 flex flex-col justify-between";
+                    const gridTopArea = document.createElement('div');
+                    gridTopArea.appendChild(gridContent);
+                    gridPageDiv.appendChild(gridTopArea);
+                    pagesContainer.appendChild(gridPageDiv);
+                    pageDivs.push(gridPageDiv);
+                });
             }
 
             // 簽章頁尾固定放在最後一頁的底部
