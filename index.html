@@ -109,7 +109,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v40</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v41</span>
                 </h1>
             </div>
         </div>
@@ -1745,7 +1745,11 @@
         function cascadeDeleteMarkerDocsForFloorplan(projectId, floorplanId) {
             if (!currentUser) return;
             window.FB.getDocs(fsMarkersCol(projectId, floorplanId))
-                .then(snap => snap.forEach(d => window.FB.deleteDoc(d.ref).catch(() => {})))
+                .then(snap => snap.forEach(d => {
+                    const data = d.data();
+                    if (data && data.photoDriveFileId) deletePhotoFromDrive(data.photoDriveFileId);
+                    window.FB.deleteDoc(d.ref).catch(() => {});
+                }))
                 .catch(err => console.error("cascade delete markers failed", err));
         }
 
@@ -3048,8 +3052,10 @@
             if (!existing) return;
             const compositeId = existing.compositeId;
             const labelStr = existing.label || String(editingMarkerId).padStart(2, '0');
+            const driveFileIdToDelete = existing.photoDriveFileId;
 
             deleteMarkerDoc(currentFloorplanId, editingMarkerId);
+            deletePhotoFromDrive(driveFileIdToDelete);
 
             const tx = db.transaction(["markers"], "readwrite");
             const store = tx.objectStore("markers");
@@ -3064,6 +3070,15 @@
                 showToast(`定位標籤 ${labelStr} 已刪除`);
                 closeDetailModal();
             };
+        }
+
+        // 刪除 Drive 上的照片檔案 (best-effort，未登入/沒有檔案/失敗都靜默跳過，不影響本機刪除)
+        function deletePhotoFromDrive(fileId) {
+            if (!fileId || !googleAccessToken) return;
+            fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${googleAccessToken}` }
+            }).catch(() => {});
         }
 
         // 只移除照片，保留標記點的位置與方向，方便之後重新補拍
@@ -3093,13 +3108,8 @@
                 showToast("已移除照片，標記點位置與方向保留");
             });
 
-            // 順手清掉 Drive 上的舊照片檔案，避免留下孤兒檔案 (best-effort，失敗也不影響使用)
-            if (oldDriveFileId && googleAccessToken) {
-                fetch(`https://www.googleapis.com/drive/v3/files/${oldDriveFileId}?supportsAllDrives=true`, {
-                    method: 'DELETE',
-                    headers: { Authorization: `Bearer ${googleAccessToken}` }
-                }).catch(() => {});
-            }
+            // 順手清掉 Drive 上的舊照片檔案，避免留下孤兒檔案
+            deletePhotoFromDrive(oldDriveFileId);
         }
 
         function clearAllMarkers() {
@@ -3112,6 +3122,7 @@
             markers.forEach(m => {
                 store.delete(m.compositeId);
                 deleteMarkerDoc(currentFloorplanId, m.id);
+                deletePhotoFromDrive(m.photoDriveFileId);
 
                 const markerDiv = document.getElementById(`map-marker-${m.id}`);
                 if (markerDiv) markerDiv.remove();
