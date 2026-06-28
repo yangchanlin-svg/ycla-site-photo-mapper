@@ -26,6 +26,8 @@
     </script>
     <!-- Google API Client (用於 Google Picker：視覺化選擇 Drive 資料夾) -->
     <script src="https://apis.google.com/js/api.js"></script>
+    <!-- Google Identity Services：直接取得 Drive 存取權杖用，避開 Firebase 導向登入在跨網域(firebaseapp.com ↔ github.io)時容易遺失暫存狀態的問題 -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 
     <!-- Firebase：用於跨裝置同步「專案／圖頁／標記點」結構性資料(不含照片本體，照片仍只存裝置本機) -->
     <script type="module">
@@ -144,7 +146,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v52</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v53</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -1715,8 +1717,48 @@
             return isStandalonePwa || isMobileUA;
         }
 
+        // Google Identity Services：只用來取得 Drive 存取權杖，跟 Firebase 身份登入分開、互不依賴，
+        // 不會經過 firebaseapp.com 這個中介網域，因此不受「跨網域暫存狀態遺失」問題影響
+        const GOOGLE_OAUTH_CLIENT_ID = "527847349086-j941n4nqfuh85pgfor0gsukk3to16ksq.apps.googleusercontent.com";
+        let gisTokenClient = null;
+
+        function requestDriveAccessToken() {
+            if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+                showDriveError('drive-signin-error', "Google 授權元件尚未載入，請檢查網路連線後重試");
+                return;
+            }
+            if (!gisTokenClient) {
+                gisTokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: GOOGLE_OAUTH_CLIENT_ID,
+                    scope: "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file",
+                    callback: (tokenResponse) => {
+                        if (tokenResponse && tokenResponse.access_token) {
+                            googleAccessToken = tokenResponse.access_token;
+                            updateDriveModalStep();
+                            updateCloudStatusBadge();
+                            pullFirestoreData().catch(() => {});
+                            showToast("已取得雲端存取權限");
+                        } else {
+                            showDriveError('drive-signin-error', "未取得雲端存取權限，請重試");
+                        }
+                    },
+                    error_callback: (err) => {
+                        showDriveError('drive-signin-error', "雲端授權失敗，請重試 (" + (err && err.type || "未知錯誤") + ")");
+                    }
+                });
+            }
+            gisTokenClient.requestAccessToken({ prompt: googleAccessToken ? '' : 'consent' });
+        }
+
         // 登入 Google 帳號：一次取得 Firebase 身份(用於跨裝置同步)以及 Drive API 存取權杖(用於讀取圖紙)
         function signInWithGoogle() {
+            // 已經有 Firebase 身份、只是缺 Drive 存取權杖：直接用 Google Identity Services 要權杖即可，
+            // 不需要再跑一次 Firebase 登入流程(那個流程在手機上容易因跨網域暫存狀態遺失而失敗)
+            if (currentUser) {
+                requestDriveAccessToken();
+                return;
+            }
+
             if (!window.FB) {
                 showDriveError('drive-signin-error', "Google 登入元件尚未載入，請檢查網路連線後重試");
                 return;
@@ -1768,7 +1810,7 @@
                     if (googleAccessToken) {
                         showToast(`已登入並取得雲端權杖：${result.user.email || ''}`);
                     } else {
-                        showToast(`已登入身份(${result.user.email || ''})，但未取得雲端存取權杖，credential：${credential ? '存在但缺少accessToken' : '不存在'}`, "warning");
+                        showToast(`已登入身份：${result.user.email || ''}，請再點一次徽章取得雲端存取權限`, "warning");
                     }
                 })
                 .catch((err) => {
