@@ -144,7 +144,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v50</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v51</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -153,9 +153,9 @@
         </div>
         <div class="flex items-center space-x-2">
             <!-- 登入狀態標籤：一眼就能看出目前是否已登入、照片/標記是否會同步雲端，點擊可直接開啟登入/授權流程 -->
-            <button onclick="openDriveImportModal()" id="cloud-status-badge" title="點擊登入或重新授權雲端同步" class="px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 border">
-                <i data-lucide="cloud-off" class="w-4 h-4"></i>
-                <span class="hidden sm:inline">尚未登入(僅本機)</span>
+            <button onclick="openDriveImportModal()" id="cloud-status-badge" title="點擊登入或重新授權雲端同步" class="px-2 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1 border">
+                <i data-lucide="cloud-off" class="w-4 h-4 flex-shrink-0"></i>
+                <span>尚未登入</span>
             </button>
             <!-- 立即同步按鈕：手動重新拉取雲端最新資料，不用等登入才觸發 -->
             <button onclick="manualSyncNow()" id="manual-sync-btn" title="重新同步雲端資料" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 border border-slate-700">
@@ -1627,17 +1627,20 @@
             const label = badge.querySelector('span');
 
             if (currentUser && googleAccessToken) {
-                badge.className = "px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 border border-teal-600 bg-teal-600/10 text-teal-300";
+                badge.className = "px-2 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-teal-600 bg-teal-600/10 text-teal-300";
                 icon.setAttribute('data-lucide', 'cloud');
-                label.innerText = `已連接雲端(${currentUser.email || ''})`;
+                label.innerText = "已連接";
+                badge.title = `已連接雲端：${currentUser.email || ''}`;
             } else if (currentUser && !googleAccessToken) {
-                badge.className = "px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 border border-amber-600 bg-amber-600/10 text-amber-300";
+                badge.className = "px-2 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-amber-600 bg-amber-600/10 text-amber-300";
                 icon.setAttribute('data-lucide', 'cloud-cog');
-                label.innerText = "雲端權限已過期(點我重新授權)";
+                label.innerText = "需授權";
+                badge.title = "雲端權限已過期，點我重新授權";
             } else {
-                badge.className = "px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 border border-slate-700 bg-slate-800 text-slate-400";
+                badge.className = "px-2 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-slate-700 bg-slate-800 text-slate-400";
                 icon.setAttribute('data-lucide', 'cloud-off');
-                label.innerText = "尚未登入(僅本機)";
+                label.innerText = "尚未登入";
+                badge.title = "尚未登入，僅存本機，點我登入 Google";
             }
             if (window.lucide) window.lucide.createIcons();
         }
