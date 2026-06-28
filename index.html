@@ -109,7 +109,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v38</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v39</span>
                 </h1>
             </div>
         </div>
@@ -474,16 +474,21 @@
             </div>
 
             <!-- 底部動作按鈕組 -->
-            <div class="bg-slate-950 px-5 py-3 border-t border-slate-800 flex justify-between items-center">
-                <button onclick="deleteCurrentMarker()" class="text-xs text-rose-400 hover:text-rose-300 font-medium transition flex items-center gap-1">
-                    <i data-lucide="trash-2" class="w-4 h-4"></i>刪除點位
-                </button>
+            <div class="bg-slate-950 px-5 py-3 border-t border-slate-800 flex flex-col gap-2">
+                <div class="flex justify-between items-center">
+                    <button onclick="deleteCurrentMarker()" class="text-xs text-rose-400 hover:text-rose-300 font-medium transition flex items-center gap-1">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>刪除點位
+                    </button>
+                    <button onclick="removeCurrentMarkerPhoto()" class="text-xs text-amber-400 hover:text-amber-300 font-medium transition flex items-center gap-1">
+                        <i data-lucide="image-off" class="w-4 h-4"></i>只移除照片(保留點位)
+                    </button>
+                </div>
                 <div class="flex space-x-2">
-                    <button onclick="retriggerCameraForDetail()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs transition flex items-center space-x-1 border border-slate-700">
+                    <button onclick="retriggerCameraForDetail()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs transition flex items-center justify-center space-x-1 border border-slate-700">
                         <i data-lucide="camera" class="w-3.5 h-3.5"></i>
                         <span>重新拍攝</span>
                     </button>
-                    <button onclick="saveDetailAndClose()" class="bg-teal-600 hover:bg-teal-500 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition">
+                    <button onclick="saveDetailAndClose()" class="flex-1 bg-teal-600 hover:bg-teal-500 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition">
                         儲存變更
                     </button>
                 </div>
@@ -2757,12 +2762,92 @@
                 </div>
             `;
 
-            div.addEventListener('click', function(e) {
-                e.stopPropagation();
-                openDetailModal(marker.id);
-            });
+            attachMarkerDragHandlers(div, marker);
 
             layer.appendChild(div);
+        }
+
+        // 標記點互動：平移模式下可拖曳改變位置；單純點擊(沒有拖曳)則開啟詳情視窗
+        // 注意：必須用跟畫布平移「同一種」事件類型 (mousedown/touchstart) 來阻止冒泡，
+        // 用 Pointer Events 的 stopPropagation 並不會擋住瀏覽器另外併發的 mousedown/touchstart，會導致拖標記時畫布同時被平移、座標跑掉
+        function attachMarkerDragHandlers(div, marker) {
+            let dragMoved = false;
+            let dragStartX = 0;
+            let dragStartY = 0;
+
+            function updatePositionFromClientXY(clientX, clientY) {
+                const img = document.getElementById('floorplan-image');
+                const rect = img.getBoundingClientRect();
+                const percentX = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+                const percentY = Math.min(Math.max((clientY - rect.top) / rect.height, 0), 1);
+
+                marker.x = percentX;
+                marker.y = percentY;
+                div.style.left = `${percentX * 100}%`;
+                div.style.top = `${percentY * 100}%`;
+            }
+
+            function finishDrag() {
+                if (dragMoved && currentMode === 'pan') {
+                    saveMarkerPosition(marker);
+                } else {
+                    openDetailModal(marker.id);
+                }
+            }
+
+            function onMouseMove(e) {
+                if (currentMode !== 'pan') return;
+                if (!dragMoved && Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) < 6) return;
+                dragMoved = true;
+                updatePositionFromClientXY(e.clientX, e.clientY);
+            }
+
+            function onMouseUp(e) {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                finishDrag();
+            }
+
+            function onTouchMove(e) {
+                if (currentMode !== 'pan' || e.touches.length === 0) return;
+                const t = e.touches[0];
+                if (!dragMoved && Math.hypot(t.clientX - dragStartX, t.clientY - dragStartY) < 6) return;
+                dragMoved = true;
+                e.preventDefault();
+                updatePositionFromClientXY(t.clientX, t.clientY);
+            }
+
+            function onTouchEnd(e) {
+                document.removeEventListener('touchmove', onTouchMove);
+                document.removeEventListener('touchend', onTouchEnd);
+                finishDrag();
+            }
+
+            div.addEventListener('mousedown', function(e) {
+                e.stopPropagation();
+                dragMoved = false;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+
+            div.addEventListener('touchstart', function(e) {
+                e.stopPropagation();
+                dragMoved = false;
+                dragStartX = e.touches[0].clientX;
+                dragStartY = e.touches[0].clientY;
+                document.addEventListener('touchmove', onTouchMove, { passive: false });
+                document.addEventListener('touchend', onTouchEnd);
+            }, { passive: true });
+        }
+
+        // 拖曳標記點後，把新位置存回資料庫並同步到雲端
+        function saveMarkerPosition(marker) {
+            idbPutAsync("markers", marker).then(() => {
+                pushMarkerDoc(marker.floorplanId, marker);
+                showToast(`已更新「${marker.label}」的位置`);
+            });
         }
 
         function refreshMarkerUI(marker) {
@@ -2979,6 +3064,42 @@
                 showToast(`定位標籤 ${labelStr} 已刪除`);
                 closeDetailModal();
             };
+        }
+
+        // 只移除照片，保留標記點的位置與方向，方便之後重新補拍
+        function removeCurrentMarkerPhoto() {
+            if (editingMarkerId === null) return;
+            const existing = markers.find(m => m.id === editingMarkerId);
+            if (!existing) return;
+            if (!existing.photo) return showToast("這個點目前還沒有照片", "warning");
+            if (!confirm("確定要移除這張照片嗎？標記點的位置與方向會保留，可以之後再重新拍攝。")) return;
+
+            const oldDriveFileId = existing.photoDriveFileId;
+            existing.photo = null;
+            existing.photoDriveFileId = null;
+
+            idbPutAsync("markers", existing).then(() => {
+                pushMarkerDoc(existing.floorplanId, existing);
+
+                document.getElementById('detail-photo-preview').classList.add('hidden');
+                document.getElementById('detail-no-photo').classList.remove('hidden');
+
+                const idx = markers.findIndex(m => m.id === editingMarkerId);
+                if (idx !== -1) {
+                    markers[idx].photo = null;
+                    markers[idx].photoDriveFileId = null;
+                }
+                updateMarkersListUI();
+                showToast("已移除照片，標記點位置與方向保留");
+            });
+
+            // 順手清掉 Drive 上的舊照片檔案，避免留下孤兒檔案 (best-effort，失敗也不影響使用)
+            if (oldDriveFileId && googleAccessToken) {
+                fetch(`https://www.googleapis.com/drive/v3/files/${oldDriveFileId}?supportsAllDrives=true`, {
+                    method: 'DELETE',
+                    headers: { Authorization: `Bearer ${googleAccessToken}` }
+                }).catch(() => {});
+            }
         }
 
         function clearAllMarkers() {
