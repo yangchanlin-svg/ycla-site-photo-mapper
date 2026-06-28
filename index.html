@@ -109,7 +109,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v41</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v42</span>
                 </h1>
             </div>
         </div>
@@ -1584,6 +1584,20 @@
         } else {
             window.addEventListener('firebase-ready', setupFirebaseAuthListener);
         }
+
+        // 切換回這個分頁/App 時自動同步一次，減少需要手動點「同步」才會看到其他裝置最新異動的情況
+        let lastAutoPullAt = 0;
+        function maybeAutoPullOnReturn() {
+            if (!currentUser) return;
+            const now = Date.now();
+            if (now - lastAutoPullAt < 5000) return; // 5 秒內不重複拉取，避免快速切換造成多次請求
+            lastAutoPullAt = now;
+            pullFirestoreData().catch(() => {});
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') maybeAutoPullOnReturn();
+        });
+        window.addEventListener('focus', maybeAutoPullOnReturn);
 
         function openDriveImportModal() {
             document.getElementById('drive-import-modal').classList.remove('hidden');
