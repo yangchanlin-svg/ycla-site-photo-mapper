@@ -144,7 +144,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v51</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v52</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -1723,6 +1723,8 @@
             }
 
             if (shouldUseRedirectSignIn()) {
+                // 標記「即將進行導向登入」，導回後若 sessionStorage 沒能存活，可以據此判斷問題出在哪
+                try { sessionStorage.setItem('ycla_pending_redirect_signin', '1'); } catch (e) {}
                 window.FB.signInWithRedirect(window.FB.auth, window.FB.provider);
                 return; // 頁面即將整頁導向 Google 登入，結果會在導回後由 handleRedirectSignInResult() 處理
             }
@@ -1744,16 +1746,30 @@
         // 從整頁導向登入流程導回 App 後，接收登入結果(身份 + Drive 存取權杖)；App 啟動時呼叫一次即可
         function handleRedirectSignInResult() {
             if (!window.FB) return;
+            let wasPendingRedirect = false;
+            try { wasPendingRedirect = sessionStorage.getItem('ycla_pending_redirect_signin') === '1'; sessionStorage.removeItem('ycla_pending_redirect_signin'); } catch (e) {}
+
             window.FB.getRedirectResult(window.FB.auth)
                 .then((result) => {
-                    if (!result) return; // 不是從導向登入流程回來的一般啟動，靜默跳過
+                    if (!result) {
+                        // 診斷用：如果剛才確實發起過導向登入卻拿不到結果，代表瀏覽器把導向前的暫存狀態(sessionStorage)弄丟了
+                        if (wasPendingRedirect) {
+                            showToast("登入導回後沒有取得結果(暫存狀態可能遺失)，請點雲朵徽章再試一次", "warning");
+                        }
+                        return;
+                    }
                     const credential = window.FB.GoogleAuthProvider.credentialFromResult(result);
                     googleAccessToken = (credential && credential.accessToken) || null;
                     currentUser = result.user;
                     updateDriveModalStep();
                     updateCloudStatusBadge();
                     pullFirestoreData().catch(() => {});
-                    showToast(`已登入 Google：${result.user.email || ''}`);
+                    // 診斷用：明確區分「拿到身份也拿到雲端權杖」vs「拿到身份但雲端權杖遺失」，方便定位行動裝置上的問題
+                    if (googleAccessToken) {
+                        showToast(`已登入並取得雲端權杖：${result.user.email || ''}`);
+                    } else {
+                        showToast(`已登入身份(${result.user.email || ''})，但未取得雲端存取權杖，credential：${credential ? '存在但缺少accessToken' : '不存在'}`, "warning");
+                    }
                 })
                 .catch((err) => {
                     showDriveError('drive-signin-error', "Google 登入失敗，請重試 (" + (err && err.code || "未知錯誤") + ")");
