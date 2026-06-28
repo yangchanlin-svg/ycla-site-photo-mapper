@@ -146,7 +146,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v53</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v54</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -1647,6 +1647,8 @@
             if (window.lucide) window.lucide.createIcons();
         }
 
+        restoreCachedDriveAccessToken();
+
         if (window.FB) {
             setupFirebaseAuthListener();
             handleRedirectSignInResult();
@@ -1720,7 +1722,30 @@
         // Google Identity Services：只用來取得 Drive 存取權杖，跟 Firebase 身份登入分開、互不依賴，
         // 不會經過 firebaseapp.com 這個中介網域，因此不受「跨網域暫存狀態遺失」問題影響
         const GOOGLE_OAUTH_CLIENT_ID = "527847349086-j941n4nqfuh85pgfor0gsukk3to16ksq.apps.googleusercontent.com";
+        const DRIVE_TOKEN_STORAGE_KEY = "ycla_drive_token_cache";
         let gisTokenClient = null;
+
+        // 把權杖連同到期時間存進 localStorage，重新整理頁面後可以先試著復用，不用每次都重新跑一次授權流程
+        function cacheDriveAccessToken(accessToken, expiresInSeconds) {
+            try {
+                localStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, JSON.stringify({
+                    accessToken,
+                    expiresAt: Date.now() + (expiresInSeconds || 3600) * 1000
+                }));
+            } catch (e) {}
+        }
+
+        // App 啟動時呼叫一次：如果 localStorage 裡還有沒過期的權杖(預留 60 秒緩衝)，直接拿來用
+        function restoreCachedDriveAccessToken() {
+            try {
+                const raw = localStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
+                if (!raw) return;
+                const cached = JSON.parse(raw);
+                if (cached && cached.accessToken && cached.expiresAt > Date.now() + 60000) {
+                    googleAccessToken = cached.accessToken;
+                }
+            } catch (e) {}
+        }
 
         function requestDriveAccessToken() {
             if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
@@ -1734,6 +1759,7 @@
                     callback: (tokenResponse) => {
                         if (tokenResponse && tokenResponse.access_token) {
                             googleAccessToken = tokenResponse.access_token;
+                            cacheDriveAccessToken(tokenResponse.access_token, tokenResponse.expires_in);
                             updateDriveModalStep();
                             updateCloudStatusBadge();
                             pullFirestoreData().catch(() => {});
@@ -1775,6 +1801,7 @@
                 .then((result) => {
                     const credential = window.FB.GoogleAuthProvider.credentialFromResult(result);
                     googleAccessToken = (credential && credential.accessToken) || null;
+                    if (googleAccessToken) cacheDriveAccessToken(googleAccessToken, 3600);
                     currentUser = result.user;
                     updateDriveModalStep();
                     updateCloudStatusBadge();
@@ -1802,6 +1829,7 @@
                     }
                     const credential = window.FB.GoogleAuthProvider.credentialFromResult(result);
                     googleAccessToken = (credential && credential.accessToken) || null;
+                    if (googleAccessToken) cacheDriveAccessToken(googleAccessToken, 3600);
                     currentUser = result.user;
                     updateDriveModalStep();
                     updateCloudStatusBadge();
@@ -2351,6 +2379,7 @@
                 .then(res => {
                     if (res.status === 401) {
                         googleAccessToken = null;
+                        try { localStorage.removeItem(DRIVE_TOKEN_STORAGE_KEY); } catch (e) {}
                         updateCloudStatusBadge();
                         throw new Error("登入已過期，請重新登入 Google");
                     }
