@@ -29,7 +29,7 @@
     <!-- Google Identity Services：直接取得 Drive 存取權杖用，避開 Firebase 導向登入在跨網域(firebaseapp.com ↔ github.io)時容易遺失暫存狀態的問題 -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <!-- Tesseract.js：純前端 OCR，用來自動判讀平面圖上的樓層標示文字(如「1F」「2F」)，不需要後端或 API 金鑰 -->
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" async></script>
 
     <!-- Firebase：用於跨裝置同步「專案／圖頁／標記點」結構性資料(不含照片本體，照片仍只存裝置本機) -->
     <script type="module">
@@ -228,7 +228,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v64</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v65</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -788,7 +788,7 @@
                 </button>
             </div>
             <div class="p-4 border-t border-slate-800 flex flex-col gap-2">
-                <button onclick="rerunFloorZoneDetection()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2 rounded-xl transition text-xs flex items-center justify-center gap-1.5">
+                <button id="rerun-floor-detection-btn" onclick="rerunFloorZoneDetection()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2 rounded-xl transition text-xs flex items-center justify-center gap-1.5 disabled:opacity-50">
                     <i data-lucide="scan-text" class="w-4 h-4"></i>重新自動判讀這張圖頁
                 </button>
                 <button onclick="saveFloorZonesAndClose()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-2.5 rounded-xl transition text-sm">
@@ -1755,10 +1755,36 @@
             });
         }
 
+        // Tesseract.js 改成 async 載入，不擋住 App 啟動速度，但代表呼叫判讀時它可能還沒載完，這裡先等待最多 8 秒
+        function waitForTesseract(timeoutMs) {
+            return new Promise(resolve => {
+                if (window.Tesseract) return resolve(true);
+                const start = Date.now();
+                const poll = setInterval(() => {
+                    if (window.Tesseract) {
+                        clearInterval(poll);
+                        resolve(true);
+                    } else if (Date.now() - start > timeoutMs) {
+                        clearInterval(poll);
+                        resolve(false);
+                    }
+                }, 300);
+            });
+        }
+
         async function detectFloorZonesForFloorplan(floorplanId) {
-            if (!window.Tesseract) return;
+            const tesseractReady = await waitForTesseract(8000);
+            if (!tesseractReady) {
+                showToast("OCR 判讀元件載入失敗(請檢查網路連線)，可改用手動新增樓層分區", "warning");
+                return;
+            }
             const fp = await idbGetAsync("floorplans", floorplanId);
-            if (!fp || !fp.data) return;
+            if (!fp || !fp.data) {
+                showToast("這張圖頁還沒有圖片內容，無法判讀", "warning");
+                return;
+            }
+
+            showToast(`正在判讀「${fp.name}」的樓層分區，圖面較複雜時可能需要 10~30 秒...`);
 
             try {
                 const [{ data: ocrData }, imgSize] = await Promise.all([
@@ -1872,9 +1898,18 @@
         async function rerunFloorZoneDetection() {
             const fp = floorplans.find(f => f.id === currentFloorplanId);
             if (!fp) return;
-            closeFloorZonesModal();
-            await detectFloorZonesForFloorplan(fp.id);
-            openFloorZonesModal();
+            const btn = document.getElementById('rerun-floor-detection-btn');
+            const list = document.getElementById('floor-zones-list');
+            if (btn) btn.disabled = true;
+            list.innerHTML = `<p class="text-xs text-teal-400 text-center py-3 flex items-center justify-center gap-1.5"><i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i>正在判讀中，請稍候...</p>`;
+            if (window.lucide) window.lucide.createIcons();
+            try {
+                await detectFloorZonesForFloorplan(fp.id);
+            } finally {
+                if (btn) btn.disabled = false;
+                const freshFp = floorplans.find(f => f.id === currentFloorplanId);
+                renderFloorZonesList(freshFp ? freshFp.floorZones : []);
+            }
         }
 
         async function saveFloorZonesAndClose() {
