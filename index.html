@@ -228,7 +228,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v65</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v66</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -1744,7 +1744,9 @@
 
         // --- 樓層自動判讀：用 Tesseract.js 在平面圖圖片上找「1F」「2F」「B1F」「RF」之類的樓層標示文字，
         // 算出每個樓層在圖片上的垂直分布範圍，之後新增點位時就能依座標自動判斷在哪一樓層 ---
-        const FLOOR_LABEL_PATTERN = /^(B\d{1,2}F|R\d{0,2}F|\d{1,2}F)$/i;
+        // 只比對字首，不要求整個字完全等於樓層代碼：圖紙上的標示通常是「1F平面圖」這種樓層代碼+中文說明黏在一起的字，
+        // 而 OCR 只載入英文字庫，中文部分常會被誤判成亂碼或被忽略，所以只要開頭符合樓層代碼就視為命中
+        const FLOOR_LABEL_PATTERN = /^(B\d{1,2}F|R\d{0,2}F|\d{1,2}F)\b/i;
 
         function loadImageNaturalSize(dataUrl) {
             return new Promise((resolve, reject) => {
@@ -1794,8 +1796,12 @@
 
                 const words = (ocrData && ocrData.words) || [];
                 const matches = words
-                    .map(w => ({ text: (w.text || '').trim().toUpperCase(), yTop: w.bbox.y0 }))
-                    .filter(w => FLOOR_LABEL_PATTERN.test(w.text));
+                    .map(w => {
+                        const text = (w.text || '').trim().toUpperCase();
+                        const m = text.match(FLOOR_LABEL_PATTERN);
+                        return m ? { text: m[1], yTop: w.bbox.y0, yBottom: w.bbox.y1 } : null;
+                    })
+                    .filter(Boolean);
 
                 if (matches.length === 0) {
                     showToast(`「${fp.name}」未自動偵測到樓層標示文字，可在「樓層分區」手動設定`, "warning");
@@ -1811,10 +1817,12 @@
                     return true;
                 });
 
+                // 圖紙慣例是「樓層標示文字畫在自己這個樓層圖面的下方/左下角」(例如 01 1F平面圖)，
+                // 不是畫在下一個樓層的開頭，所以每個標示代表的是自己這個區塊的「下緣」，範圍要往上回溯到前一個標示(或圖片頂端)
                 const zones = uniqueMatches.map((m, i) => ({
                     floor: m.text,
-                    yTop: m.yTop / imgSize.height,
-                    yBottom: (i + 1 < uniqueMatches.length) ? uniqueMatches[i + 1].yTop / imgSize.height : 1
+                    yTop: (i === 0) ? 0 : (uniqueMatches[i - 1].yBottom / imgSize.height),
+                    yBottom: m.yBottom / imgSize.height
                 }));
 
                 const freshFp = await idbGetAsync("floorplans", floorplanId);
