@@ -226,7 +226,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v62</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v63</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -1712,6 +1712,10 @@
                     pullFirestoreData().catch(() => {});
                     retryPendingPhotoUploads().catch(() => {});
                 }
+                // 身份已恢復但目前沒有(或還沒拿到)有效的 Drive 權杖時，試著靜默換新一次，盡量避免使用者看到「需授權」
+                if (currentUser && !googleAccessToken) {
+                    trySilentDriveTokenRefresh();
+                }
             });
         }
 
@@ -1794,6 +1798,7 @@
         let lastAutoPullAt = 0;
         function maybeAutoPullOnReturn() {
             if (!currentUser) return;
+            if (!googleAccessToken) trySilentDriveTokenRefresh(); // 背景分頁的計時器可能被瀏覽器延後執行，切回前景時補檢查一次
             const now = Date.now();
             if (now - lastAutoPullAt < 5000) return; // 5 秒內不重複拉取，避免快速切換造成多次請求
             lastAutoPullAt = now;
@@ -1867,7 +1872,8 @@
             } catch (e) {}
         }
 
-        // App 啟動時呼叫一次：如果 localStorage 裡還有沒過期的權杖(預留 60 秒緩衝)，直接拿來用
+        // App 啟動時呼叫一次：如果 localStorage 裡還有沒過期的權杖(預留 60 秒緩衝)，直接拿來用；
+        // 若已經過期但之前同意過授權，改成在背景嘗試靜默換新，而不是直接讓使用者看到「需授權」
         function restoreCachedDriveAccessToken() {
             try {
                 const raw = localStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
@@ -1875,8 +1881,58 @@
                 const cached = JSON.parse(raw);
                 if (cached && cached.accessToken && cached.expiresAt > Date.now() + 60000) {
                     googleAccessToken = cached.accessToken;
+                    scheduleDriveTokenSilentRefresh(Math.round((cached.expiresAt - Date.now()) / 1000));
+                } else {
+                    setTimeout(() => trySilentDriveTokenRefresh(), 0);
                 }
             } catch (e) {}
+        }
+
+        const DRIVE_CONSENT_GRANTED_KEY = "ycla_drive_consent_granted";
+
+        function ensureGisTokenClient() {
+            if (gisTokenClient) return gisTokenClient;
+            gisTokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: GOOGLE_OAUTH_CLIENT_ID,
+                scope: "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file",
+                callback: (tokenResponse) => {
+                    if (tokenResponse && tokenResponse.access_token) {
+                        googleAccessToken = tokenResponse.access_token;
+                        cacheDriveAccessToken(tokenResponse.access_token, tokenResponse.expires_in);
+                        try { localStorage.setItem(DRIVE_CONSENT_GRANTED_KEY, "1"); } catch (e) {}
+                        scheduleDriveTokenSilentRefresh(tokenResponse.expires_in);
+                        updateDriveModalStep();
+                        updateCloudStatusBadge();
+                        pullFirestoreData().catch(() => {});
+                        retryPendingPhotoUploads().catch(() => {});
+                        showToast("已取得雲端存取權限");
+                    } else {
+                        showDriveError('drive-signin-error', "未取得雲端存取權限，請重試");
+                    }
+                },
+                error_callback: (err) => {
+                    showDriveError('drive-signin-error', "雲端授權失敗，請重試 (" + (err && err.type || "未知錯誤") + ")");
+                }
+            });
+            return gisTokenClient;
+        }
+
+        // 權杖通常 1 小時後過期，且純前端架構沒有後端可以安全保存 refresh token，
+        // 所以改成「曾經同意過一次授權後，之後都試著用 prompt:'' 靜默換新權杖」，使用者大多時候不會再看到任何彈出視窗
+        let driveTokenSilentRefreshTimer = null;
+        function scheduleDriveTokenSilentRefresh(expiresInSeconds) {
+            if (driveTokenSilentRefreshTimer) clearTimeout(driveTokenSilentRefreshTimer);
+            const refreshInMs = Math.max((expiresInSeconds || 3600) - 300, 60) * 1000; // 到期前 5 分鐘就先換新
+            driveTokenSilentRefreshTimer = setTimeout(() => trySilentDriveTokenRefresh(), refreshInMs);
+        }
+
+        function trySilentDriveTokenRefresh() {
+            if (!currentUser) return;
+            let consentGranted = false;
+            try { consentGranted = localStorage.getItem(DRIVE_CONSENT_GRANTED_KEY) === "1"; } catch (e) {}
+            if (!consentGranted) return; // 從沒同意過授權，靜默换新沒有意義，必須讓使用者主動點一次
+            if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) return;
+            ensureGisTokenClient().requestAccessToken({ prompt: '' });
         }
 
         function requestDriveAccessToken() {
@@ -1884,28 +1940,7 @@
                 showDriveError('drive-signin-error', "Google 授權元件尚未載入，請檢查網路連線後重試");
                 return;
             }
-            if (!gisTokenClient) {
-                gisTokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: GOOGLE_OAUTH_CLIENT_ID,
-                    scope: "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file",
-                    callback: (tokenResponse) => {
-                        if (tokenResponse && tokenResponse.access_token) {
-                            googleAccessToken = tokenResponse.access_token;
-                            cacheDriveAccessToken(tokenResponse.access_token, tokenResponse.expires_in);
-                            updateDriveModalStep();
-                            updateCloudStatusBadge();
-                            pullFirestoreData().catch(() => {});
-                            retryPendingPhotoUploads().catch(() => {});
-                            showToast("已取得雲端存取權限");
-                        } else {
-                            showDriveError('drive-signin-error', "未取得雲端存取權限，請重試");
-                        }
-                    },
-                    error_callback: (err) => {
-                        showDriveError('drive-signin-error', "雲端授權失敗，請重試 (" + (err && err.type || "未知錯誤") + ")");
-                    }
-                });
-            }
+            ensureGisTokenClient();
             gisTokenClient.requestAccessToken({ prompt: googleAccessToken ? '' : 'consent' });
         }
 
@@ -1934,7 +1969,11 @@
                 .then((result) => {
                     const credential = window.FB.GoogleAuthProvider.credentialFromResult(result);
                     googleAccessToken = (credential && credential.accessToken) || null;
-                    if (googleAccessToken) cacheDriveAccessToken(googleAccessToken, 3600);
+                    if (googleAccessToken) {
+                        cacheDriveAccessToken(googleAccessToken, 3600);
+                        try { localStorage.setItem(DRIVE_CONSENT_GRANTED_KEY, "1"); } catch (e) {}
+                        scheduleDriveTokenSilentRefresh(3600);
+                    }
                     currentUser = result.user;
                     updateDriveModalStep();
                     updateCloudStatusBadge();
@@ -1962,7 +2001,11 @@
                     }
                     const credential = window.FB.GoogleAuthProvider.credentialFromResult(result);
                     googleAccessToken = (credential && credential.accessToken) || null;
-                    if (googleAccessToken) cacheDriveAccessToken(googleAccessToken, 3600);
+                    if (googleAccessToken) {
+                        cacheDriveAccessToken(googleAccessToken, 3600);
+                        try { localStorage.setItem(DRIVE_CONSENT_GRANTED_KEY, "1"); } catch (e) {}
+                        scheduleDriveTokenSilentRefresh(3600);
+                    }
                     currentUser = result.user;
                     updateDriveModalStep();
                     updateCloudStatusBadge();
