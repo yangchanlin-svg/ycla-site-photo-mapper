@@ -28,6 +28,8 @@
     <script src="https://apis.google.com/js/api.js"></script>
     <!-- Google Identity Services：直接取得 Drive 存取權杖用，避開 Firebase 導向登入在跨網域(firebaseapp.com ↔ github.io)時容易遺失暫存狀態的問題 -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <!-- Tesseract.js：純前端 OCR，用來自動判讀平面圖上的樓層標示文字(如「1F」「2F」)，不需要後端或 API 金鑰 -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <!-- Firebase：用於跨裝置同步「專案／圖頁／標記點」結構性資料(不含照片本體，照片仍只存裝置本機) -->
     <script type="module">
@@ -226,7 +228,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v63</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v64</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -381,6 +383,9 @@
                 </button>
                 <button onclick="openDriveImportModal()" class="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-400 flex items-center justify-center border border-slate-700" title="從 Google Drive 新增圖頁／樓層 (可跨裝置同步)">
                     <i data-lucide="cloud-download" class="w-4 h-4"></i>
+                </button>
+                <button onclick="openFloorZonesModal()" class="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-400 flex items-center justify-center border border-slate-700" title="樓層分區設定(影響雲端照片檔名編號)">
+                    <i data-lucide="layers" class="w-4 h-4"></i>
                 </button>
             </div>
 
@@ -591,6 +596,16 @@
                     <input type="text" id="detail-label" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-semibold font-mono transition" placeholder="例如：3F-01 或 B1-B柱">
                 </div>
 
+                <!-- 所屬樓層：系統會依平面圖上自動判讀到的「1F」「2F」等樓層分區自動猜測，但 AI 判讀不一定準，可以手動修正；
+                     此欄位只影響雲端照片的檔名編號(例如 3F-006)，不影響畫面上看到的標籤編號 -->
+                <div class="w-full mb-3">
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5 flex items-center gap-1">
+                        <i data-lucide="layers" class="w-3.5 h-3.5 text-teal-400"></i>所屬樓層 (影響雲端照片檔名，AI自動判讀，可手動修正)
+                    </label>
+                    <select id="detail-floor-select" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono transition">
+                    </select>
+                </div>
+
                 <!-- 備註輸入 -->
                 <div class="w-full mb-2">
                     <label class="block text-xs font-bold text-slate-400 uppercase mb-1.5">照片現場說明 (備註)</label>
@@ -747,6 +762,41 @@
                         <i data-lucide="download" class="w-4 h-4"></i>全部匯入成圖頁
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 彈出視窗：樓層分區設定 — AI 會自動判讀平面圖上的「1F」「2F」等樓層標示文字來分區，
+         但判讀不一定準，這裡可以手動修正，並把套用結果(雲端照片檔名編號)補套到舊照片上 -->
+    <div id="floor-zones-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-40 no-print">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl">
+            <div class="flex items-center justify-between p-4 border-b border-slate-800">
+                <h3 class="font-bold text-white text-sm flex items-center gap-2">
+                    <i data-lucide="layers" class="w-4 h-4 text-teal-400"></i>樓層分區設定
+                </h3>
+                <button onclick="closeFloorZonesModal()" class="text-slate-500 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-4 space-y-3 max-h-[60vh] overflow-y-auto">
+                <p class="text-xs text-slate-400 leading-relaxed">
+                    系統會自動判讀目前這張圖頁上的「1F」「2F」「B1F」等樓層標示文字，依垂直位置切分樓層範圍，用來決定雲端照片的檔名編號(例如 <span class="font-mono text-teal-400">3F-006</span>)，不影響畫面上看到的標籤編號。
+                </p>
+                <div id="floor-zones-list" class="space-y-2"></div>
+                <button onclick="addFloorZoneRow()" class="text-xs text-teal-400 hover:text-teal-300 font-medium flex items-center gap-1">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>手動新增一個樓層分區
+                </button>
+            </div>
+            <div class="p-4 border-t border-slate-800 flex flex-col gap-2">
+                <button onclick="rerunFloorZoneDetection()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2 rounded-xl transition text-xs flex items-center justify-center gap-1.5">
+                    <i data-lucide="scan-text" class="w-4 h-4"></i>重新自動判讀這張圖頁
+                </button>
+                <button onclick="saveFloorZonesAndClose()" class="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-2.5 rounded-xl transition text-sm">
+                    儲存分區設定
+                </button>
+                <button onclick="renameAllProjectPhotosOnDrive()" class="w-full bg-slate-800 hover:bg-slate-700 text-amber-300 font-medium py-2 rounded-xl transition text-xs flex items-center justify-center gap-1.5">
+                    <i data-lucide="refresh-ccw" class="w-3.5 h-3.5"></i>套用樓層編號到雲端照片(含舊照片重新命名)
+                </button>
             </div>
         </div>
     </div>
@@ -1686,8 +1736,167 @@
                     renderFloorplanTabs();
                 }
                 showToast(pageImages.length > 1 ? `已新增 ${pageImages.length} 張圖頁(每頁PDF轉出一張)` : "圖頁新增成功！");
+                // 在背景自動判讀每張新圖頁上的樓層標示文字(如「1F」「2F」)，供照片雲端檔名使用，不擋住上傳流程
+                newSheets.forEach(s => detectFloorZonesForFloorplan(s.id).catch(() => {}));
                 onDone();
             };
+        }
+
+        // --- 樓層自動判讀：用 Tesseract.js 在平面圖圖片上找「1F」「2F」「B1F」「RF」之類的樓層標示文字，
+        // 算出每個樓層在圖片上的垂直分布範圍，之後新增點位時就能依座標自動判斷在哪一樓層 ---
+        const FLOOR_LABEL_PATTERN = /^(B\d{1,2}F|R\d{0,2}F|\d{1,2}F)$/i;
+
+        function loadImageNaturalSize(dataUrl) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+                img.onerror = reject;
+                img.src = dataUrl;
+            });
+        }
+
+        async function detectFloorZonesForFloorplan(floorplanId) {
+            if (!window.Tesseract) return;
+            const fp = await idbGetAsync("floorplans", floorplanId);
+            if (!fp || !fp.data) return;
+
+            try {
+                const [{ data: ocrData }, imgSize] = await Promise.all([
+                    Tesseract.recognize(fp.data, 'eng'),
+                    loadImageNaturalSize(fp.data)
+                ]);
+
+                const words = (ocrData && ocrData.words) || [];
+                const matches = words
+                    .map(w => ({ text: (w.text || '').trim().toUpperCase(), yTop: w.bbox.y0 }))
+                    .filter(w => FLOOR_LABEL_PATTERN.test(w.text));
+
+                if (matches.length === 0) {
+                    showToast(`「${fp.name}」未自動偵測到樓層標示文字，可在「樓層分區」手動設定`, "warning");
+                    return;
+                }
+
+                // 同一個樓層標示可能被重複偵測到，只保留每個樓層字樣第一次出現的位置(由上往下)
+                matches.sort((a, b) => a.yTop - b.yTop);
+                const seen = new Set();
+                const uniqueMatches = matches.filter(m => {
+                    if (seen.has(m.text)) return false;
+                    seen.add(m.text);
+                    return true;
+                });
+
+                const zones = uniqueMatches.map((m, i) => ({
+                    floor: m.text,
+                    yTop: m.yTop / imgSize.height,
+                    yBottom: (i + 1 < uniqueMatches.length) ? uniqueMatches[i + 1].yTop / imgSize.height : 1
+                }));
+
+                const freshFp = await idbGetAsync("floorplans", floorplanId);
+                if (!freshFp) return;
+                freshFp.floorZones = zones;
+                await idbPutAsync("floorplans", freshFp);
+                const idx = floorplans.findIndex(f => f.id === floorplanId);
+                if (idx !== -1) floorplans[idx].floorZones = zones;
+                pushFloorplanDoc(freshFp);
+                showToast(`「${freshFp.name}」已自動偵測到樓層分區：${zones.map(z => z.floor).join('、')}`);
+            } catch (err) {
+                console.error("detectFloorZonesForFloorplan failed", err);
+                showToast(`「${fp.name}」樓層自動判讀失敗，可在「樓層分區」手動設定`, "warning");
+            }
+        }
+
+        // 依 Y 座標(0~1，相對於圖片高度)查出對應的樓層；找不到分區資料或沒有匹配的區段時回傳 null(表示「未分類」)
+        function getFloorForY(floorplan, yRatio) {
+            const zones = floorplan && floorplan.floorZones;
+            if (!zones || zones.length === 0) return null;
+            const zone = zones.find(z => yRatio >= z.yTop && yRatio < z.yBottom);
+            return zone ? zone.floor : (zones[zones.length - 1].floor || null);
+        }
+
+        // --- 樓層分區設定彈窗：顯示/編輯目前圖頁的樓層分區，並可重新觸發 AI 判讀或把編號套到雲端舊照片 ---
+        function openFloorZonesModal() {
+            const fp = floorplans.find(f => f.id === currentFloorplanId);
+            if (!fp) return showToast("請先選擇一張圖頁", "warning");
+            renderFloorZonesList(fp.floorZones || []);
+            document.getElementById('floor-zones-modal').classList.remove('hidden');
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        function closeFloorZonesModal() {
+            document.getElementById('floor-zones-modal').classList.add('hidden');
+        }
+
+        function renderFloorZonesList(zones) {
+            const list = document.getElementById('floor-zones-list');
+            if (!zones || zones.length === 0) {
+                list.innerHTML = `<p class="text-xs text-slate-500 text-center py-3">尚未偵測到樓層分區，可按下方「重新自動判讀」或手動新增。</p>`;
+                return;
+            }
+            list.innerHTML = zones.map((z, i) => `
+                <div class="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl p-2" data-zone-row="${i}">
+                    <input type="text" value="${z.floor}" class="w-20 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-teal-500" data-zone-floor>
+                    <span class="text-[10px] text-slate-500">Y</span>
+                    <input type="number" value="${Math.round(z.yTop * 100)}" min="0" max="100" class="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500" data-zone-ytop>
+                    <span class="text-[10px] text-slate-500">~</span>
+                    <input type="number" value="${Math.round(z.yBottom * 100)}" min="0" max="100" class="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500" data-zone-ybottom>
+                    <span class="text-[10px] text-slate-500">%</span>
+                    <button onclick="this.closest('[data-zone-row]').remove()" class="text-slate-500 hover:text-rose-400 ml-auto">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+            `).join('');
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        function addFloorZoneRow() {
+            const list = document.getElementById('floor-zones-list');
+            if (list.querySelector('p')) list.innerHTML = ""; // 清掉「尚未偵測到」的提示文字
+            const row = document.createElement('div');
+            row.className = "flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl p-2";
+            row.setAttribute('data-zone-row', '');
+            row.innerHTML = `
+                <input type="text" value="" placeholder="例如 3F" class="w-20 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-teal-500" data-zone-floor>
+                <span class="text-[10px] text-slate-500">Y</span>
+                <input type="number" value="0" min="0" max="100" class="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500" data-zone-ytop>
+                <span class="text-[10px] text-slate-500">~</span>
+                <input type="number" value="100" min="0" max="100" class="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500" data-zone-ybottom>
+                <span class="text-[10px] text-slate-500">%</span>
+                <button onclick="this.closest('[data-zone-row]').remove()" class="text-slate-500 hover:text-rose-400 ml-auto">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+            `;
+            list.appendChild(row);
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        async function rerunFloorZoneDetection() {
+            const fp = floorplans.find(f => f.id === currentFloorplanId);
+            if (!fp) return;
+            closeFloorZonesModal();
+            await detectFloorZonesForFloorplan(fp.id);
+            openFloorZonesModal();
+        }
+
+        async function saveFloorZonesAndClose() {
+            const fp = floorplans.find(f => f.id === currentFloorplanId);
+            if (!fp) return;
+
+            const rows = Array.from(document.querySelectorAll('#floor-zones-list [data-zone-row]'));
+            const zones = rows.map(row => ({
+                floor: row.querySelector('[data-zone-floor]').value.trim().toUpperCase(),
+                yTop: Math.max(0, Math.min(100, Number(row.querySelector('[data-zone-ytop]').value) || 0)) / 100,
+                yBottom: Math.max(0, Math.min(100, Number(row.querySelector('[data-zone-ybottom]').value) || 100)) / 100
+            })).filter(z => z.floor).sort((a, b) => a.yTop - b.yTop);
+
+            const freshFp = await idbGetAsync("floorplans", fp.id);
+            freshFp.floorZones = zones;
+            await idbPutAsync("floorplans", freshFp);
+            const idx = floorplans.findIndex(f => f.id === fp.id);
+            if (idx !== -1) floorplans[idx].floorZones = zones;
+            pushFloorplanDoc(freshFp);
+
+            showToast("已儲存樓層分區設定");
+            closeFloorZonesModal();
         }
 
         // --- 4.5 Google 登入 + 雲端匯入：統一用 Firebase Auth 取得「身份」(跨裝置同步用) 與「Drive 存取權杖」(讀取圖紙用) ---
@@ -2115,6 +2324,7 @@
                 numberingPrefix: fp.numberingPrefix || "",
                 numberingDigits: fp.numberingDigits || "3",
                 order: fp.order || 0,
+                floorZones: fp.floorZones || [],
                 updatedAt: window.FB.serverTimestamp()
             }, { merge: true }).catch(err => console.error("push floorplan failed", err));
         }
@@ -2158,6 +2368,7 @@
                 angle: marker.angle,
                 label: marker.label || "",
                 memo: marker.memo || "",
+                floor: marker.floor || null,
                 photoDriveFileId: marker.photoDriveFileId || null,
                 updatedAt: window.FB.serverTimestamp()
             }, { merge: true }).catch(err => console.error("push marker failed", err));
@@ -2283,6 +2494,51 @@
                 .then(file => file.id);
         }
 
+        // 樓層被(手動或重新判讀)修正後，把 Drive 上既有的照片檔案改名以符合最新的樓層編號，不需要重新上傳檔案內容
+        async function renameMarkerPhotoOnDrive(marker) {
+            if (!marker.photoDriveFileId || !googleAccessToken) return;
+            const filenameBase = await buildFloorAwareFilenameBase(marker);
+            const newName = `${filenameBase}_${marker.photoDriveFileId.slice(-8)}.jpg`;
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${marker.photoDriveFileId}?supportsAllDrives=true`, {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newName })
+            });
+            if (!res.ok) throw new Error(`重新命名失敗 (HTTP ${res.status})`);
+        }
+
+        // 一次性整理：依目前每個點位的樓層分類，把這個專案下所有已上傳到 Drive 的照片都改成 1F-001、2F-001 這種樓層編號檔名，
+        // 用在「樓層分區」判讀完成後，想把舊照片的檔名也一起套用新規則的情境
+        let renamingAllPhotos = false;
+        async function renameAllProjectPhotosOnDrive() {
+            if (!currentUser || !googleAccessToken) {
+                showToast("請先登入並取得雲端存取權限", "warning");
+                return;
+            }
+            if (renamingAllPhotos) return;
+            renamingAllPhotos = true;
+            showToast("正在重新命名雲端照片，請稍候...");
+            try {
+                const projectMarkers = await idbGetAllByIndexAsync("markers", "projectId", currentProjectId);
+                const withPhoto = projectMarkers.filter(m => m.photoDriveFileId);
+                let okCount = 0, failCount = 0;
+                for (const m of withPhoto) {
+                    try {
+                        await renameMarkerPhotoOnDrive(m);
+                        okCount++;
+                    } catch (err) {
+                        console.error("rename failed for marker", m.id, err);
+                        failCount++;
+                    }
+                }
+                showToast(failCount > 0
+                    ? `已重新命名 ${okCount} 張照片，${failCount} 張失敗(可能權杖過期，可再執行一次)`
+                    : `已重新命名 ${okCount} 張雲端照片`, failCount > 0 ? "warning" : "success");
+            } finally {
+                renamingAllPhotos = false;
+            }
+        }
+
         // 本機沒有照片快取時，從 Drive 補抓回來 (例如桌電要看手機現場拍的照片)
         function fetchPhotoFromDrive(marker) {
             if (!marker.photoDriveFileId || !googleAccessToken) return;
@@ -2394,6 +2650,7 @@
             merged.numberingPrefix = data.numberingPrefix || "";
             merged.numberingDigits = data.numberingDigits || "3";
             merged.order = data.order || 0;
+            merged.floorZones = (data.floorZones && data.floorZones.length > 0) ? data.floorZones : merged.floorZones;
             await idbPutAsync("floorplans", merged);
 
             const markersSnap = await window.FB.getDocs(fsMarkersCol(projectId, floorplanId));
@@ -2430,6 +2687,7 @@
             merged.angle = data.angle;
             merged.label = data.label || String(numericId);
             merged.memo = data.memo || "";
+            merged.floor = data.floor || null;
             merged.photoDriveFileId = data.photoDriveFileId || null;
             await idbPutAsync("markers", merged);
 
@@ -3119,7 +3377,9 @@
                 y: pendingMarkerPos.y,
                 angle: currentAngle,
                 photo: photoData,
-                memo: ""
+                memo: "",
+                // 依平面圖上自動判讀的樓層分區，猜這個點位落在哪一樓層(用於雲端照片檔名)；找不到分區資料時先留空，使用者可在詳細視窗手動指定
+                floor: getFloorForY(floorplans.find(f => f.id === currentFloorplanId), pendingMarkerPos.y)
             };
 
             const tx = db.transaction(["markers"], "readwrite");
@@ -3138,8 +3398,20 @@
             };
         }
 
+        // 算出某個點位在「同一樓層」裡的第幾個(依建立順序，不受跨樓層交錯拍攝影響)，
+        // 用來組成雲端照片檔名(例如 3F-006)，跟畫面上看到的全域編號(label，例如 09)分開，不互相影響
+        async function buildFloorAwareFilenameBase(marker) {
+            const floor = marker.floor || '未分類';
+            const sameFloorplanMarkers = await idbGetAllByIndexAsync("markers", "floorplanId", marker.floorplanId);
+            const sameFloor = sameFloorplanMarkers
+                .filter(m => (m.floor || '未分類') === floor)
+                .sort((a, b) => a.id - b.id);
+            const seq = sameFloor.findIndex(m => m.id === marker.id) + 1;
+            return `${floor}-${String(seq > 0 ? seq : 1).padStart(3, '0')}`;
+        }
+
         // 若已登入 Google，把標記的照片上傳到 Drive，讓其他裝置之後也能補抓看到 (未登入時靜默跳過，不影響本機使用)
-        function uploadMarkerPhotoIfSignedIn(marker, opts) {
+        async function uploadMarkerPhotoIfSignedIn(marker, opts) {
             const silent = opts && opts.silent;
             if (!marker.photo) return Promise.resolve();
             if (!currentUser) {
@@ -3151,7 +3423,8 @@
                 if (!silent) showToast("照片僅存於本機，尚未同步雲端：請點「雲端匯入」重新授權 Google Drive 存取", "warning");
                 return Promise.resolve();
             }
-            const filename = `${marker.label || marker.id}_${Date.now()}.jpg`;
+            const filenameBase = await buildFloorAwareFilenameBase(marker);
+            const filename = `${filenameBase}_${Date.now()}.jpg`;
             return uploadPhotoToDrive(marker.photo, filename)
                 .then(fileId => {
                     marker.photoDriveFileId = fileId;
@@ -3464,9 +3737,40 @@
             // 帶入原本標記名稱、備註與拍照方向
             document.getElementById('detail-label').value = marker.label || "";
             document.getElementById('detail-memo').value = marker.memo || "";
+            populateFloorSelect(marker.floor);
             detailAngle = marker.angle || 0;
             updateDetailCompassVisuals();
             document.getElementById('marker-detail-modal').classList.remove('hidden');
+        }
+
+        // 把目前圖頁已知的樓層選項(自動判讀到的 + 目前點位本身已有的值)填進下拉選單，並支援自訂輸入新樓層名稱
+        function populateFloorSelect(currentFloor) {
+            const select = document.getElementById('detail-floor-select');
+            const fp = floorplans.find(f => f.id === currentFloorplanId);
+            const zoneFloors = (fp && fp.floorZones) ? fp.floorZones.map(z => z.floor) : [];
+            const options = Array.from(new Set([...zoneFloors, currentFloor].filter(Boolean)));
+
+            select.innerHTML = `<option value="">未分類</option>` +
+                options.map(f => `<option value="${f}">${f}</option>`).join('') +
+                `<option value="__custom__">自訂...</option>`;
+            select.value = currentFloor || "";
+            if (currentFloor && !options.includes(currentFloor)) select.value = currentFloor; // 保留意外不在清單裡的舊值
+
+            select.onchange = function() {
+                if (select.value === "__custom__") {
+                    const customFloor = prompt("請輸入自訂樓層名稱(例如 4F、RF、B1F)：", "");
+                    if (customFloor && customFloor.trim()) {
+                        const trimmed = customFloor.trim().toUpperCase();
+                        const opt = document.createElement('option');
+                        opt.value = trimmed;
+                        opt.innerText = trimmed;
+                        select.insertBefore(opt, select.lastElementChild);
+                        select.value = trimmed;
+                    } else {
+                        select.value = currentFloor || "";
+                    }
+                }
+            };
         }
 
         function closeDetailModal() {
@@ -3499,6 +3803,9 @@
             const compositeId = existing.compositeId;
             const memoText = document.getElementById('detail-memo').value.trim();
             const newLabelText = document.getElementById('detail-label').value.trim();
+            const floorSelectVal = document.getElementById('detail-floor-select').value;
+            const newFloor = (floorSelectVal && floorSelectVal !== "__custom__") ? floorSelectVal : null;
+            const floorChanged = (existing.floor || null) !== newFloor;
 
             if (!newLabelText) {
                 showToast("編號不得為空！", "warning");
@@ -3514,6 +3821,7 @@
                     marker.memo = memoText;
                     marker.label = newLabelText;
                     marker.angle = detailAngle;
+                    marker.floor = newFloor;
 
                     store.put(marker).onsuccess = function() {
                         const idx = markers.findIndex(m => m.id === editingMarkerId);
@@ -3521,6 +3829,7 @@
                             markers[idx].memo = memoText;
                             markers[idx].label = newLabelText;
                             markers[idx].angle = detailAngle;
+                            markers[idx].floor = newFloor;
                         }
 
                         // 即時更新地圖上的 Marker 文字與方向，無需重繪整個圖層
@@ -3531,6 +3840,11 @@
                         pushMarkerDoc(currentFloorplanId, marker);
                         showToast(`已儲存標記點修改`);
                         closeDetailModal();
+
+                        // 樓層被手動修正時，雲端照片的檔名編號也要跟著重算，否則檔名跟畫面標示的樓層會不一致
+                        if (floorChanged && marker.photoDriveFileId) {
+                            renameMarkerPhotoOnDrive(marker).catch(() => {});
+                        }
                     };
                 }
             };
