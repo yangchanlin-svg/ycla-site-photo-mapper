@@ -6,7 +6,7 @@
 
 開發紀錄：見 [CHANGELOG.md](CHANGELOG.md)
 
-> **目前仍在內部測試階段**，功能與資料結構都可能還會調整，暫不開放外部 Issue / PR，敬請期待正式開源的時間點。
+歡迎透過 [Issues](https://github.com/yangchanlin-svg/ycla-site-photo-mapper/issues) 回報問題或提出功能建議，也歡迎直接送 Pull Request。
 
 ## 特色
 
@@ -47,7 +47,7 @@
 
 ## 參與貢獻
 
-目前專案仍在內部測試階段，暫不開放外部 Issue / Pull Request。等測試穩定、正式對外開源後，這裡會補上完整的貢獻指南。
+歡迎貢獻！詳見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 授權
 
