@@ -226,7 +226,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v61</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v62</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -1710,6 +1710,7 @@
                 // 第一次偵測到「已登入」(包含重新整理後 Firebase 自動恢復登入狀態)，就嘗試從雲端拉取最新資料
                 if (currentUser && !wasSignedIn) {
                     pullFirestoreData().catch(() => {});
+                    retryPendingPhotoUploads().catch(() => {});
                 }
             });
         }
@@ -1777,6 +1778,7 @@
         }
 
         restoreCachedDriveAccessToken();
+        retryPendingPhotoUploads().catch(() => {});
 
         if (window.FB) {
             setupFirebaseAuthListener();
@@ -1796,6 +1798,7 @@
             if (now - lastAutoPullAt < 5000) return; // 5 秒內不重複拉取，避免快速切換造成多次請求
             lastAutoPullAt = now;
             pullFirestoreData().catch(() => {});
+            retryPendingPhotoUploads().catch(() => {});
         }
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') maybeAutoPullOnReturn();
@@ -1892,6 +1895,7 @@
                             updateDriveModalStep();
                             updateCloudStatusBadge();
                             pullFirestoreData().catch(() => {});
+                            retryPendingPhotoUploads().catch(() => {});
                             showToast("已取得雲端存取權限");
                         } else {
                             showDriveError('drive-signin-error', "未取得雲端存取權限，請重試");
@@ -2305,6 +2309,8 @@
                 .finally(() => {
                     if (icon) icon.classList.remove('animate-spin');
                 });
+
+            retryPendingPhotoUploads().catch(() => {});
         }
 
         async function mergeRemoteProject(projectId, data) {
@@ -3090,28 +3096,48 @@
         }
 
         // 若已登入 Google，把標記的照片上傳到 Drive，讓其他裝置之後也能補抓看到 (未登入時靜默跳過，不影響本機使用)
-        function uploadMarkerPhotoIfSignedIn(marker) {
-            if (!marker.photo) return;
+        function uploadMarkerPhotoIfSignedIn(marker, opts) {
+            const silent = opts && opts.silent;
+            if (!marker.photo) return Promise.resolve();
             if (!currentUser) {
-                showToast("照片僅存於本機，未登入 Google：點右上角雲朵圖示登入才能跨裝置同步", "warning");
-                return;
+                if (!silent) showToast("照片僅存於本機，未登入 Google：點右上角雲朵圖示登入才能跨裝置同步", "warning");
+                return Promise.resolve();
             }
             if (!googleAccessToken) {
                 // Firebase 登入狀態會在重新整理/重開 App 後自動恢復，但 Drive 存取權杖不會，需要使用者重新授權一次
-                showToast("照片僅存於本機，尚未同步雲端：請點「雲端匯入」重新授權 Google Drive 存取", "warning");
-                return;
+                if (!silent) showToast("照片僅存於本機，尚未同步雲端：請點「雲端匯入」重新授權 Google Drive 存取", "warning");
+                return Promise.resolve();
             }
             const filename = `${marker.label || marker.id}_${Date.now()}.jpg`;
-            uploadPhotoToDrive(marker.photo, filename)
+            return uploadPhotoToDrive(marker.photo, filename)
                 .then(fileId => {
                     marker.photoDriveFileId = fileId;
                     idbPutAsync("markers", marker);
                     pushMarkerDoc(marker.floorplanId, marker);
+                    if (silent) showToast(`標籤 ${marker.label || marker.id} 的照片已補傳到雲端`);
                 })
                 .catch(err => {
                     console.error("upload marker photo failed", err);
-                    showToast(`照片雲端上傳失敗：${err.message}（已存於本機，可再試一次或檢查登入狀態）`, "warning");
+                    if (!silent) showToast(`照片雲端上傳失敗：${err.message}（已存於本機，可再試一次或檢查登入狀態）`, "warning");
                 });
+        }
+
+        // 手機在拍照後常常很快被切到背景或螢幕鎖定，導致上傳到 Drive 的背景請求被瀏覽器中斷、永遠卡在「本機有照片但沒上傳」的狀態，
+        // 且整個過程連 catch 都不會跑到(因為連 JS 執行都被瀏覽器暫停了)，完全沒有任何錯誤提示。
+        // 這裡做一個自我修復機制：只要重新開啟 App、且已登入，就自動找出這種「漏網」的照片並補傳一次。
+        let retryingPendingUploads = false;
+        async function retryPendingPhotoUploads() {
+            if (!currentUser || !googleAccessToken || retryingPendingUploads || !currentProjectId) return;
+            retryingPendingUploads = true;
+            try {
+                const projectMarkers = await idbGetAllByIndexAsync("markers", "projectId", currentProjectId);
+                const pending = projectMarkers.filter(m => m.photo && !m.photoDriveFileId);
+                for (const m of pending) {
+                    await uploadMarkerPhotoIfSignedIn(m, { silent: true });
+                }
+            } finally {
+                retryingPendingUploads = false;
+            }
         }
 
         function updateExistingMarkerPhoto(id, photoData) {
