@@ -1515,8 +1515,8 @@
         }
 
         // 動態更新下一個標籤編號的預覽
-        function updateNextLabelPreview() {
-            const nextId = getNextAvailableId();
+        async function updateNextLabelPreview() {
+            const nextId = await getNextAvailableId();
             const previewStr = formatLabel(nextId);
             document.getElementById('next-label-preview').innerText = previewStr;
             saveNumberingConfig();
@@ -3191,7 +3191,7 @@
             }
         }
 
-        document.getElementById('viewport').addEventListener('click', function(e) {
+        document.getElementById('viewport').addEventListener('click', async function(e) {
             if (!mapLoaded || currentMode !== 'add') return;
             if (isDragging) return;
 
@@ -3208,16 +3208,21 @@
 
             pendingMarkerPos = { x: percentX, y: percentY };
 
-            const predictId = getNextAvailableId();
+            const predictId = await getNextAvailableId();
             nextMarkerId = predictId;
             const generatedLabel = formatLabel(predictId);
 
             openMarkerSetupModal(generatedLabel);
         });
 
-        function getNextAvailableId() {
-            if (markers.length === 0) return 1;
-            const sortedIds = markers.map(m => m.id).sort((a,b) => a-b);
+        // 編號範圍是整個專案(跨所有圖頁/樓層底圖)，不是只看目前這張底圖上的標記，
+        // 這樣使用者依實際拍照順序換底圖時，編號才會接續下去而不會每換一張圖就從頭開始
+        async function getNextAvailableId() {
+            const projectMarkers = currentProjectId
+                ? await idbGetAllByIndexAsync("markers", "projectId", currentProjectId)
+                : [];
+            if (projectMarkers.length === 0) return 1;
+            const sortedIds = projectMarkers.map(m => m.id).sort((a,b) => a-b);
             let next = 1;
             for (let id of sortedIds) {
                 if (id === next) next++;
@@ -3406,8 +3411,8 @@
         }
 
         // --- 9. 拍照標籤 (Markers) 資料庫儲存與渲染 ---
-        function createNewMarker(photoData) {
-            const nextId = getNextAvailableId();
+        async function createNewMarker(photoData) {
+            const nextId = await getNextAvailableId();
             const labelStr = formatLabel(nextId);
 
             const newMarker = {
