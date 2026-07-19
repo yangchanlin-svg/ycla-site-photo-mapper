@@ -318,10 +318,15 @@
                         <i data-lucide="binary" class="w-3.5 h-3.5 text-teal-400"></i>自動編碼規則
                     </span>
                     <div class="space-y-3 bg-slate-950 p-3 rounded-xl border border-slate-800/80">
+                        <div>
+                            <label class="block text-[10px] text-slate-400 font-bold mb-1">棟別</label>
+                            <input type="text" id="cfg-building" oninput="updateNextLabelPreview()" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono" placeholder="如 A、B（留空則不分棟）">
+                            <p class="text-[9px] text-slate-500 mt-1 leading-snug">填了棟別後，編號格式固定為「棟別-序號」（如 A-001），且同一棟別的圖頁（不管幾張底圖、跨幾個樓層）編號會接續下去，不會每換一張底圖就重置；換成不同棟別才會重新從 001 開始。</p>
+                        </div>
                         <div class="grid grid-cols-2 gap-2">
                             <div>
                                 <label class="block text-[10px] text-slate-400 font-bold mb-1">編碼字首 (Prefix)</label>
-                                <input type="text" id="cfg-prefix" oninput="updateNextLabelPreview()" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono" placeholder="如 3F-, A-">
+                                <input type="text" id="cfg-prefix" oninput="updateNextLabelPreview()" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-teal-500 font-mono" placeholder="未填棟別時才生效">
                             </div>
                             <div>
                                 <label class="block text-[10px] text-slate-400 font-bold mb-1">流水號位數</label>
@@ -1022,6 +1027,9 @@
                             <button onclick="event.stopPropagation(); startEditProject('${p.id}', '${p.name}', '${p.code || ''}')" class="text-slate-400 hover:text-teal-400 p-1 rounded transition" title="修改專案資訊">
                                 <i data-lucide="edit-2" class="w-3.5 h-3.5"></i>
                             </button>
+                            <button onclick="event.stopPropagation(); duplicateProject('${p.id}')" class="text-slate-400 hover:text-amber-400 p-1 rounded transition" title="完整複製一份專案(含雲端照片)，不影響原專案">
+                                <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                            </button>
                             ${p.id !== 'default-project' ? `
                                 <button onclick="event.stopPropagation(); deleteProject('${p.id}')" class="text-slate-500 hover:text-rose-400 p-1 rounded transition" title="刪除專案">
                                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
@@ -1192,6 +1200,122 @@
             };
         }
 
+        // 完整獨立複製一個專案：圖頁、標記、以及 Drive 上的照片檔案都會複製成新的一份，
+        // 跟原專案完全切開(不共用任何 Drive 照片檔案 id)，複製完成後會依「棟別」重新編排一次連續編號
+        // (同棟別跨圖頁接續、不同棟別各自從 1 開始)；原專案完全不會被更動，
+        // 用在想先在副本上套用新編號規則測試、又不想動到正式資料的情境
+        async function duplicateProject(sourceProjectId) {
+            const source = await idbGetAsync("projects", sourceProjectId);
+            if (!source) return;
+            if (!currentUser || !googleAccessToken) {
+                showToast("複製專案需要先登入並取得 Google Drive 存取權限（要實際複製雲端照片檔案）", "warning");
+                return;
+            }
+
+            const newName = prompt("複製後的新專案名稱：", `${source.name || ""}_副本`);
+            if (newName === null) return;
+            const newCode = prompt("複製後的新專案代碼：", `${source.code || "PJ"}a`);
+            if (newCode === null) return;
+
+            showToast("正在複製專案與雲端照片，請稍候，時間依照片數量而定，請勿關閉頁面...");
+
+            const newProjectId = "proj-" + Date.now();
+            const newProject = {
+                id: newProjectId,
+                code: (newCode.trim() || `${source.code || "PJ"}a`),
+                name: (newName.trim() || `${source.name || ""}_副本`),
+                numberingPrefix: "",
+                numberingDigits: "3"
+            };
+            await idbPutAsync("projects", newProject);
+            pushProjectDoc(newProject);
+
+            let newPhotosFolderId;
+            try {
+                newPhotosFolderId = await ensurePhotosFolderId(newProject);
+            } catch (err) {
+                showToast(`建立新專案雲端資料夾失敗：${err.message}`, "error");
+                return;
+            }
+
+            const sourceFloorplans = await idbGetAllByIndexAsync("floorplans", "projectId", sourceProjectId);
+            sourceFloorplans.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+            // 依棟別分組(沒填棟別的圖頁全部算同一組)，同一組內跨圖頁的編號要接續，所以先分組再逐組編號
+            const buildingGroups = new Map();
+            sourceFloorplans.forEach(fp => {
+                const key = fp.building || "";
+                if (!buildingGroups.has(key)) buildingGroups.set(key, []);
+                buildingGroups.get(key).push(fp);
+            });
+
+            let firstNewFloorplanId = null;
+            let okPhotos = 0, failPhotos = 0;
+
+            for (const group of buildingGroups.values()) {
+                let seq = 1;
+                for (const fp of group) {
+                    const newFloorplanId = `fp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                    if (!firstNewFloorplanId) firstNewFloorplanId = newFloorplanId;
+
+                    const newFp = { ...fp, id: newFloorplanId, projectId: newProjectId };
+                    await idbPutAsync("floorplans", newFp);
+                    pushFloorplanDoc(newFp);
+
+                    const sourceMarkers = await idbGetAllByIndexAsync("markers", "floorplanId", fp.id);
+                    sourceMarkers.sort((a, b) => a.id - b.id);
+
+                    for (const m of sourceMarkers) {
+                        const newId = seq++;
+                        const newLabel = formatLabelWithConfig(newId, newFp.building, newFp.numberingPrefix, newFp.numberingDigits);
+
+                        let newPhotoDriveFileId = null;
+                        if (m.photoDriveFileId) {
+                            try {
+                                const safeLabel = newLabel.replace(/[\\/:*?"<>|]/g, '-');
+                                newPhotoDriveFileId = await copyDriveFile(m.photoDriveFileId, newPhotosFolderId, `${safeLabel}_${Date.now()}.jpg`);
+                                okPhotos++;
+                            } catch (err) {
+                                console.error("複製雲端照片失敗", m.id, err);
+                                failPhotos++;
+                            }
+                        }
+
+                        const newMarker = {
+                            compositeId: `${newFloorplanId}-${newId}`,
+                            floorplanId: newFloorplanId,
+                            projectId: newProjectId,
+                            id: newId,
+                            label: newLabel,
+                            x: m.x,
+                            y: m.y,
+                            angle: m.angle,
+                            photo: m.photo || null,
+                            memo: m.memo || "",
+                            floor: m.floor || null,
+                            photoDriveFileId: newPhotoDriveFileId
+                        };
+                        await idbPutAsync("markers", newMarker);
+                        pushMarkerDoc(newFloorplanId, newMarker, newProjectId);
+                    }
+                }
+            }
+
+            newProject.lastFloorplanId = firstNewFloorplanId;
+            await idbPutAsync("projects", newProject);
+            pushProjectDoc(newProject);
+
+            showToast(
+                failPhotos > 0
+                    ? `專案複製完成：${newProject.name}（雲端照片 ${okPhotos} 張成功、${failPhotos} 張失敗，可稍後在副本裡重試補傳）`
+                    : `專案複製完成：${newProject.name}（雲端照片共 ${okPhotos} 張，編號已依棟別重新接續）`,
+                failPhotos > 0 ? "warning" : "success"
+            );
+
+            loadProjectList();
+            switchProject(newProjectId);
+        }
+
         function updateHeaderDisplay() {
             document.getElementById('sidebar-project-code').innerText = currentProjectCode;
             document.getElementById('sidebar-project-name').innerText = currentProjectName;
@@ -1237,6 +1361,7 @@
                     filename: proj.filename || "底圖.png",
                     numberingPrefix: proj.numberingPrefix || "",
                     numberingDigits: proj.numberingDigits || "3",
+                    building: "",
                     order: 0,
                     createdAt: Date.now()
                 };
@@ -1317,6 +1442,7 @@
 
             document.getElementById('cfg-prefix').value = fp.numberingPrefix || "";
             document.getElementById('cfg-digits').value = fp.numberingDigits || "3";
+            document.getElementById('cfg-building').value = fp.building || "";
 
             resetCanvasState();
 
@@ -1494,6 +1620,7 @@
             if (!currentFloorplanId) return;
             const prefix = document.getElementById('cfg-prefix').value;
             const digits = document.getElementById('cfg-digits').value;
+            const building = document.getElementById('cfg-building').value.trim();
 
             const transaction = db.transaction(["floorplans"], "readwrite");
             const store = transaction.objectStore("floorplans");
@@ -1502,6 +1629,7 @@
                 if (fp) {
                     fp.numberingPrefix = prefix;
                     fp.numberingDigits = digits;
+                    fp.building = building;
                     store.put(fp);
                     pushFloorplanDoc(fp);
 
@@ -1509,6 +1637,7 @@
                     if (local) {
                         local.numberingPrefix = prefix;
                         local.numberingDigits = digits;
+                        local.building = building;
                     }
                 }
             };
@@ -1522,12 +1651,18 @@
             saveNumberingConfig();
         }
 
-        // 格式化編碼
+        // 格式化編碼：填了棟別就固定用「棟別-序號」，沒填棟別才照舊用自訂字首
+        function formatLabelWithConfig(id, building, prefix, digits) {
+            const paddedId = String(id).padStart(parseInt(digits) || 2, '0');
+            if (building) return `${building}-${paddedId}`;
+            return `${prefix || ''}${paddedId}`;
+        }
+
         function formatLabel(id) {
+            const building = document.getElementById('cfg-building').value.trim();
             const prefix = document.getElementById('cfg-prefix').value;
-            const digits = parseInt(document.getElementById('cfg-digits').value) || 2;
-            const paddedId = String(id).padStart(digits, '0');
-            return `${prefix}${paddedId}`;
+            const digits = document.getElementById('cfg-digits').value;
+            return formatLabelWithConfig(id, building, prefix, digits);
         }
 
         function resetCanvasState() {
@@ -1719,6 +1854,7 @@
                 pageNumber: idx + 1, // PDF 來源時記錄是第幾頁，供其他裝置從 Drive 補抓時重新渲染同一頁
                 numberingPrefix: "",
                 numberingDigits: "3",
+                building: "",
                 order: existingCount + idx,
                 createdAt: Date.now()
             }));
@@ -2366,6 +2502,7 @@
                 pageNumber: fp.pageNumber || 1,
                 numberingPrefix: fp.numberingPrefix || "",
                 numberingDigits: fp.numberingDigits || "3",
+                building: fp.building || "",
                 order: fp.order || 0,
                 floorZones: fp.floorZones || [],
                 updatedAt: window.FB.serverTimestamp()
@@ -2403,9 +2540,10 @@
         }
 
         // 標記點同步位置／角度／編號／備註，以及照片在 Drive 上的檔案 ID (照片本體仍快取在裝置本機，只是多存一個雲端參照供其他裝置補抓)
-        function pushMarkerDoc(floorplanId, marker) {
+        // projectId 預設是目前開啟的專案；複製專案時需要寫入「新專案」的路徑，所以允許明確指定
+        function pushMarkerDoc(floorplanId, marker, projectId) {
             if (!currentUser) return;
-            window.FB.setDoc(fsMarkerDoc(currentProjectId, floorplanId, String(marker.id)), {
+            window.FB.setDoc(fsMarkerDoc(projectId || currentProjectId, floorplanId, String(marker.id)), {
                 x: marker.x,
                 y: marker.y,
                 angle: marker.angle,
@@ -2417,9 +2555,9 @@
             }, { merge: true }).catch(err => console.error("push marker failed", err));
         }
 
-        function deleteMarkerDoc(floorplanId, markerId) {
+        function deleteMarkerDoc(floorplanId, markerId, projectId) {
             if (!currentUser) return;
-            window.FB.deleteDoc(fsMarkerDoc(currentProjectId, floorplanId, String(markerId))).catch(err => console.error("delete marker failed", err));
+            window.FB.deleteDoc(fsMarkerDoc(projectId || currentProjectId, floorplanId, String(markerId))).catch(err => console.error("delete marker failed", err));
         }
 
         // --- 拍照標記的照片上傳到 Drive / 從 Drive 補抓，讓其他裝置也能看到照片 ---
@@ -2535,6 +2673,19 @@
                 })
                 .then(res => { if (!res.ok) throw new Error('上傳照片到 Drive 失敗'); return res.json(); })
                 .then(file => file.id);
+        }
+
+        // 在 Drive 上把既有檔案複製成一份新檔案(新的 file id)，放進指定資料夾並改新檔名；
+        // 用於「複製專案」時讓新專案擁有自己獨立的照片檔案，不會共用原專案的檔案(避免之後改名互相影響)
+        async function copyDriveFile(fileId, newParentFolderId, newName) {
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/copy?supportsAllDrives=true`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${googleAccessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newName, parents: [newParentFolderId] })
+            });
+            if (!res.ok) throw new Error(`複製雲端照片失敗 (HTTP ${res.status})`);
+            const file = await res.json();
+            return file.id;
         }
 
         // 點位編號被修正後，把 Drive 上既有的照片檔案改名以符合最新編號，不需要重新上傳檔案內容
@@ -2692,6 +2843,7 @@
             merged.pageNumber = data.pageNumber || 1;
             merged.numberingPrefix = data.numberingPrefix || "";
             merged.numberingDigits = data.numberingDigits || "3";
+            merged.building = data.building || "";
             merged.order = data.order || 0;
             merged.floorZones = (data.floorZones && data.floorZones.length > 0) ? data.floorZones : merged.floorZones;
             await idbPutAsync("floorplans", merged);
@@ -3215,14 +3367,24 @@
             openMarkerSetupModal(generatedLabel);
         });
 
-        // 編號範圍是整個專案(跨所有圖頁/樓層底圖)，不是只看目前這張底圖上的標記，
-        // 這樣使用者依實際拍照順序換底圖時，編號才會接續下去而不會每換一張圖就從頭開始
+        // 編號範圍是「同一棟別」(跨所有屬於這個棟別的圖頁/樓層底圖)，不是只看目前這張底圖上的標記，
+        // 這樣使用者依實際拍照順序換底圖時，同一棟的編號才會接續下去而不會每換一張圖就從頭開始；
+        // 換到不同棟別的圖頁，編號才會重新從 1 開始。沒有填棟別的圖頁全部視為同一組(棟別="")，維持舊專案原有行為
         async function getNextAvailableId() {
-            const projectMarkers = currentProjectId
-                ? await idbGetAllByIndexAsync("markers", "projectId", currentProjectId)
-                : [];
-            if (projectMarkers.length === 0) return 1;
-            const sortedIds = projectMarkers.map(m => m.id).sort((a,b) => a-b);
+            if (!currentProjectId) return 1;
+            const currentFp = floorplans.find(f => f.id === currentFloorplanId);
+            const building = (currentFp && currentFp.building) || "";
+
+            const projectFloorplans = await idbGetAllByIndexAsync("floorplans", "projectId", currentProjectId);
+            const sameBuildingFpIds = new Set(
+                projectFloorplans.filter(f => (f.building || "") === building).map(f => f.id)
+            );
+
+            const projectMarkers = await idbGetAllByIndexAsync("markers", "projectId", currentProjectId);
+            const scopedMarkers = projectMarkers.filter(m => sameBuildingFpIds.has(m.floorplanId));
+
+            if (scopedMarkers.length === 0) return 1;
+            const sortedIds = scopedMarkers.map(m => m.id).sort((a,b) => a-b);
             let next = 1;
             for (let id of sortedIds) {
                 if (id === next) next++;
