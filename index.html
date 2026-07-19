@@ -795,7 +795,7 @@
                     儲存分區設定
                 </button>
                 <button onclick="renameAllProjectPhotosOnDrive()" class="w-full bg-slate-800 hover:bg-slate-700 text-amber-300 font-medium py-2 rounded-xl transition text-xs flex items-center justify-center gap-1.5">
-                    <i data-lucide="refresh-ccw" class="w-3.5 h-3.5"></i>套用樓層編號到雲端照片(含舊照片重新命名)
+                    <i data-lucide="refresh-ccw" class="w-3.5 h-3.5"></i>套用目前編號到雲端照片(含舊照片重新命名)
                 </button>
             </div>
         </div>
@@ -2537,10 +2537,10 @@
                 .then(file => file.id);
         }
 
-        // 樓層被(手動或重新判讀)修正後，把 Drive 上既有的照片檔案改名以符合最新的樓層編號，不需要重新上傳檔案內容
+        // 點位編號被修正後，把 Drive 上既有的照片檔案改名以符合最新編號，不需要重新上傳檔案內容
         async function renameMarkerPhotoOnDrive(marker) {
             if (!marker.photoDriveFileId || !googleAccessToken) return;
-            const filenameBase = await buildFloorAwareFilenameBase(marker);
+            const filenameBase = await buildFilenameBase(marker);
             const newName = `${filenameBase}_${marker.photoDriveFileId.slice(-8)}.jpg`;
             const res = await fetch(`https://www.googleapis.com/drive/v3/files/${marker.photoDriveFileId}?supportsAllDrives=true`, {
                 method: 'PATCH',
@@ -2550,8 +2550,8 @@
             if (!res.ok) throw new Error(`重新命名失敗 (HTTP ${res.status})`);
         }
 
-        // 一次性整理：依目前每個點位的樓層分類，把這個專案下所有已上傳到 Drive 的照片都改成 1F-001、2F-001 這種樓層編號檔名，
-        // 用在「樓層分區」判讀完成後，想把舊照片的檔名也一起套用新規則的情境
+        // 一次性整理：把這個專案下所有已上傳到 Drive 的照片檔名都改成跟目前畫面上點位編號一致，
+        // 用在編號被手動調整過、想把舊照片的檔名也一起套用最新編號的情境
         let renamingAllPhotos = false;
         async function renameAllProjectPhotosOnDrive() {
             if (!currentUser || !googleAccessToken) {
@@ -3446,16 +3446,11 @@
             };
         }
 
-        // 算出某個點位在「同一樓層」裡的第幾個(依建立順序，不受跨樓層交錯拍攝影響)，
-        // 用來組成雲端照片檔名(例如 3F-006)，跟畫面上看到的全域編號(label，例如 09)分開，不互相影響
-        async function buildFloorAwareFilenameBase(marker) {
-            const floor = marker.floor || '未分類';
-            const sameFloorplanMarkers = await idbGetAllByIndexAsync("markers", "floorplanId", marker.floorplanId);
-            const sameFloor = sameFloorplanMarkers
-                .filter(m => (m.floor || '未分類') === floor)
-                .sort((a, b) => a.id - b.id);
-            const seq = sameFloor.findIndex(m => m.id === marker.id) + 1;
-            return `${floor}-${String(seq > 0 ? seq : 1).padStart(3, '0')}`;
+        // 雲端照片檔名直接沿用畫面上看到的點位編號(label)，兩者保持一致；
+        // label 可能被使用者手動改成任意文字，過濾掉檔名系統不允許的符號避免上傳失敗
+        async function buildFilenameBase(marker) {
+            const safeLabel = String(marker.label || marker.id).replace(/[\\/:*?"<>|]/g, '-');
+            return safeLabel;
         }
 
         // 若已登入 Google，把標記的照片上傳到 Drive，讓其他裝置之後也能補抓看到 (未登入時靜默跳過，不影響本機使用)
@@ -3471,7 +3466,7 @@
                 if (!silent) showToast("照片僅存於本機，尚未同步雲端：請點「雲端匯入」重新授權 Google Drive 存取", "warning");
                 return Promise.resolve();
             }
-            const filenameBase = await buildFloorAwareFilenameBase(marker);
+            const filenameBase = await buildFilenameBase(marker);
             const filename = `${filenameBase}_${Date.now()}.jpg`;
             return uploadPhotoToDrive(marker.photo, filename)
                 .then(fileId => {
@@ -3853,7 +3848,7 @@
             const newLabelText = document.getElementById('detail-label').value.trim();
             const floorSelectVal = document.getElementById('detail-floor-select').value;
             const newFloor = (floorSelectVal && floorSelectVal !== "__custom__") ? floorSelectVal : null;
-            const floorChanged = (existing.floor || null) !== newFloor;
+            const labelChanged = (existing.label || "") !== newLabelText;
 
             if (!newLabelText) {
                 showToast("編號不得為空！", "warning");
@@ -3889,8 +3884,8 @@
                         showToast(`已儲存標記點修改`);
                         closeDetailModal();
 
-                        // 樓層被手動修正時，雲端照片的檔名編號也要跟著重算，否則檔名跟畫面標示的樓層會不一致
-                        if (floorChanged && marker.photoDriveFileId) {
+                        // 編號被手動修正時，雲端照片檔名也要跟著改，否則檔名跟畫面上看到的編號會不一致
+                        if (labelChanged && marker.photoDriveFileId) {
                             renameMarkerPhotoOnDrive(marker).catch(() => {});
                         }
                     };
