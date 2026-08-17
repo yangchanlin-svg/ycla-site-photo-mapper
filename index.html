@@ -228,7 +228,7 @@
                 <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-2">
                     <span class="truncate max-w-[140px] sm:max-w-none">YCLA-工地相片定位標籤系統</span>
                     <span class="hidden sm:inline text-xs font-normal bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full border border-teal-500/30">建築師專用版</span>
-                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v70</span>
+                    <span class="text-[15px] font-mono text-slate-500" id="app-version-display">v71</span>
                     <button onclick="checkForAppUpdate()" title="檢查並套用最新版本" class="text-slate-500 hover:text-teal-400 transition p-0.5">
                         <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
                     </button>
@@ -2138,7 +2138,7 @@
                 if (currentUser && !wasSignedIn) {
                     pullFirestoreData().catch(() => {});
                     retryPendingPhotoUploads().catch(() => {});
-                    retryPendingFloorplanUploads().catch(() => {});
+                    retryPendingFloorplanUploadsAllProjects().catch(() => {});
                 }
                 // 身份已恢復但目前沒有(或還沒拿到)有效的 Drive 權杖時，試著靜默換新一次，盡量避免使用者看到「需授權」
                 if (currentUser && !googleAccessToken) {
@@ -2211,7 +2211,7 @@
 
         restoreCachedDriveAccessToken();
         retryPendingPhotoUploads().catch(() => {});
-        retryPendingFloorplanUploads().catch(() => {});
+        retryPendingFloorplanUploadsAllProjects().catch(() => {});
 
         if (window.FB) {
             setupFirebaseAuthListener();
@@ -2233,7 +2233,7 @@
             lastAutoPullAt = now;
             pullFirestoreData().catch(() => {});
             retryPendingPhotoUploads().catch(() => {});
-            retryPendingFloorplanUploads().catch(() => {});
+            retryPendingFloorplanUploadsAllProjects().catch(() => {});
         }
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') maybeAutoPullOnReturn();
@@ -2335,7 +2335,7 @@
                         updateCloudStatusBadge();
                         pullFirestoreData().catch(() => {});
                         retryPendingPhotoUploads().catch(() => {});
-                        retryPendingFloorplanUploads().catch(() => {});
+                        retryPendingFloorplanUploadsAllProjects().catch(() => {});
                         showToast("已取得雲端存取權限");
                     } else {
                         showDriveError('drive-signin-error', "未取得雲端存取權限，請重試");
@@ -2493,6 +2493,13 @@
             return new Promise((resolve, reject) => {
                 const idx = db.transaction([storeName], "readonly").objectStore(storeName).index(indexName);
                 const req = idx.getAll(IDBKeyRange.only(value));
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+        function idbGetAllAsync(storeName) {
+            return new Promise((resolve, reject) => {
+                const req = db.transaction([storeName], "readonly").objectStore(storeName).getAll();
                 req.onsuccess = () => resolve(req.result);
                 req.onerror = () => reject(req.error);
             });
@@ -2876,7 +2883,7 @@
                 });
 
             retryPendingPhotoUploads().catch(() => {});
-            retryPendingFloorplanUploads().catch(() => {});
+            retryPendingFloorplanUploadsAllProjects().catch(() => {});
         }
 
         async function mergeRemoteProject(projectId, data) {
@@ -3736,42 +3743,69 @@
 
         // 底圖也可能是用「一般本機上傳」建立的(不是從雲端匯入)，若當時還沒登入或上傳失敗，
         // 就會變成只存在建立當下那台裝置的本機，其他裝置永遠看不到；跟照片一樣自我修復：
-        // 重新開啟 App 且已登入時，自動找出「本機有底圖圖片、但沒有 driveFileId」的圖頁補傳一次
-        let retryingPendingFloorplanUploads = false;
-        async function retryPendingFloorplanUploads() {
-            if (!currentUser || !googleAccessToken || retryingPendingFloorplanUploads || !currentProjectId) return;
-            retryingPendingFloorplanUploads = true;
-            try {
-                const projectFloorplans = await idbGetAllByIndexAsync("floorplans", "projectId", currentProjectId);
-                const pending = projectFloorplans.filter(fp => fp.data && !fp.driveFileId);
-                if (pending.length === 0) return;
+        // 自動找出某個專案裡「本機有底圖圖片、但沒有 driveFileId」的圖頁並補傳一次，回傳成功/失敗筆數(不跳提示，由呼叫端決定怎麼顯示)
+        async function backfillFloorplansForProject(projectId) {
+            const projectFloorplans = await idbGetAllByIndexAsync("floorplans", "projectId", projectId);
+            const pending = projectFloorplans.filter(fp => fp.data && !fp.driveFileId);
+            let okCount = 0, failCount = 0;
+            for (const fp of pending) {
+                try {
+                    // fp.data 已經是這一頁渲染完成的圖片(即使原始檔是PDF也一樣)，直接當成一般圖片上傳即可，
+                    // 不需要也不可能還原回原始 PDF
+                    const driveFileId = await uploadPlanFileToDrive(fp.data, `${fp.name || fp.filename || 'floorplan'}.jpg`, 'image/jpeg');
+                    fp.driveFileId = driveFileId;
+                    fp.driveMimeType = 'image/jpeg';
+                    await idbPutAsync("floorplans", fp);
+                    pushFloorplanDoc(fp);
 
-                let okCount = 0, failCount = 0;
-                for (const fp of pending) {
-                    try {
-                        // fp.data 已經是這一頁渲染完成的圖片(即使原始檔是PDF也一樣)，直接當成一般圖片上傳即可，
-                        // 不需要也不可能還原回原始 PDF
-                        const driveFileId = await uploadPlanFileToDrive(fp.data, `${fp.name || fp.filename || 'floorplan'}.jpg`, 'image/jpeg');
-                        fp.driveFileId = driveFileId;
-                        fp.driveMimeType = 'image/jpeg';
-                        await idbPutAsync("floorplans", fp);
-                        pushFloorplanDoc(fp);
-
+                    if (projectId === currentProjectId) {
                         const local = floorplans.find(f => f.id === fp.id);
                         if (local) {
                             local.driveFileId = driveFileId;
                             local.driveMimeType = 'image/jpeg';
                         }
-                        okCount++;
-                    } catch (err) {
-                        console.error("補傳底圖到雲端失敗", fp.id, err);
-                        failCount++;
                     }
+                    okCount++;
+                } catch (err) {
+                    console.error("補傳底圖到雲端失敗", fp.id, err);
+                    failCount++;
                 }
+            }
+            return { okCount, failCount };
+        }
+
+        // 只補傳「目前開啟的專案」，用在切換/載入某個專案的當下(這時候 currentProjectId 保證正確)
+        let retryingPendingFloorplanUploads = false;
+        async function retryPendingFloorplanUploads() {
+            if (!currentUser || !googleAccessToken || retryingPendingFloorplanUploads || !currentProjectId) return;
+            retryingPendingFloorplanUploads = true;
+            try {
+                const { okCount, failCount } = await backfillFloorplansForProject(currentProjectId);
                 if (okCount > 0) showToast(`已把 ${okCount} 張底圖補傳到雲端，其他裝置之後即可自動抓到`);
                 if (failCount > 0) showToast(`${failCount} 張底圖補傳失敗，可稍後再試一次`, "warning");
             } finally {
                 retryingPendingFloorplanUploads = false;
+            }
+        }
+
+        // 補傳「所有專案」，不是只補目前開著的這一個；用在登入/回到前景這種時機，
+        // 因為使用者不會每個專案都特地點開一次，否則永遠只有「剛好有打開過」的專案會被補到
+        let retryingPendingFloorplanUploadsAll = false;
+        async function retryPendingFloorplanUploadsAllProjects() {
+            if (!currentUser || !googleAccessToken || retryingPendingFloorplanUploadsAll) return;
+            retryingPendingFloorplanUploadsAll = true;
+            try {
+                const projects = await idbGetAllAsync("projects");
+                let totalOk = 0, totalFail = 0;
+                for (const project of projects) {
+                    const { okCount, failCount } = await backfillFloorplansForProject(project.id);
+                    totalOk += okCount;
+                    totalFail += failCount;
+                }
+                if (totalOk > 0) showToast(`已把所有專案共 ${totalOk} 張底圖補傳到雲端，其他裝置之後即可自動抓到`);
+                if (totalFail > 0) showToast(`${totalFail} 張底圖補傳失敗，可稍後再試一次(例如重新整理後再試)`, "warning");
+            } finally {
+                retryingPendingFloorplanUploadsAll = false;
             }
         }
 
