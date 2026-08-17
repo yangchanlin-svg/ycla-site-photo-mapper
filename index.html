@@ -2267,7 +2267,7 @@
         // 把權杖連同到期時間存進 localStorage，重新整理頁面後可以先試著復用，不用每次都重新跑一次授權流程
         function cacheDriveAccessToken(accessToken, expiresInSeconds) {
             try {
-                localStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, JSON.stringify({
+                sessionStorage.setItem(DRIVE_TOKEN_STORAGE_KEY, JSON.stringify({
                     accessToken,
                     expiresAt: Date.now() + (expiresInSeconds || 3600) * 1000
                 }));
@@ -2278,7 +2278,7 @@
         // 若已經過期但之前同意過授權，改成在背景嘗試靜默換新，而不是直接讓使用者看到「需授權」
         function restoreCachedDriveAccessToken() {
             try {
-                const raw = localStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
+                const raw = sessionStorage.getItem(DRIVE_TOKEN_STORAGE_KEY);
                 if (!raw) return;
                 const cached = JSON.parse(raw);
                 if (cached && cached.accessToken && cached.expiresAt > Date.now() + 60000) {
@@ -3079,7 +3079,7 @@
                 .then(res => {
                     if (res.status === 401) {
                         googleAccessToken = null;
-                        try { localStorage.removeItem(DRIVE_TOKEN_STORAGE_KEY); } catch (e) {}
+                        try { sessionStorage.removeItem(DRIVE_TOKEN_STORAGE_KEY); } catch (e) {}
                         updateCloudStatusBadge();
                         throw new Error("登入已過期，請重新登入 Google");
                     }
