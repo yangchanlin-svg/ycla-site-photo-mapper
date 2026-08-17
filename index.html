@@ -1766,11 +1766,32 @@
             next();
         }
 
+        function readFileAsDataURL(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
+        }
+
         // 核心檔案載入分配器 (支援對話選擇與拖曳置放)：處理單一檔案，完成後呼叫 onDone 以接續處理批次中的下一個檔案
-        function processSelectedFile(file, onDone, shouldSwitch) {
+        async function processSelectedFile(file, onDone, shouldSwitch) {
             onDone = onDone || function () {};
             if (shouldSwitch === undefined) shouldSwitch = true;
-            const driveFileId = file.driveFileId || null; // 來自 Drive 匯入時會帶有此屬性，供日後其他裝置自動補抓圖片
+            let driveFileId = file.driveFileId || null; // 來自 Drive 匯入時會帶有此屬性，供日後其他裝置自動補抓圖片
+
+            // 一般本機直接上傳(不是從「雲端匯入」挑選既有檔案)時，若已登入 Google，順手把原始檔案也備份一份到
+            // 這個專案的 01_plan 資料夾並記下 driveFileId，這樣其他裝置才能像照片一樣自動補抓到這張底圖，
+            // 不會變成只存在上傳當下那台裝置的本機、其他裝置永遠只看得到專案跟頁籤卻沒有圖
+            if (!driveFileId && currentUser && googleAccessToken) {
+                try {
+                    const dataUrl = await readFileAsDataURL(file);
+                    driveFileId = await uploadPlanFileToDrive(dataUrl, file.name, file.type);
+                } catch (err) {
+                    console.error("底圖自動備份到雲端失敗，僅保留在本機", err);
+                }
+            }
 
             if (file.type === "application/pdf") {
                 const fileReader = new FileReader();
@@ -2113,6 +2134,7 @@
                 if (currentUser && !wasSignedIn) {
                     pullFirestoreData().catch(() => {});
                     retryPendingPhotoUploads().catch(() => {});
+                    retryPendingFloorplanUploads().catch(() => {});
                 }
                 // 身份已恢復但目前沒有(或還沒拿到)有效的 Drive 權杖時，試著靜默換新一次，盡量避免使用者看到「需授權」
                 if (currentUser && !googleAccessToken) {
@@ -2185,6 +2207,7 @@
 
         restoreCachedDriveAccessToken();
         retryPendingPhotoUploads().catch(() => {});
+        retryPendingFloorplanUploads().catch(() => {});
 
         if (window.FB) {
             setupFirebaseAuthListener();
@@ -2206,6 +2229,7 @@
             lastAutoPullAt = now;
             pullFirestoreData().catch(() => {});
             retryPendingPhotoUploads().catch(() => {});
+            retryPendingFloorplanUploads().catch(() => {});
         }
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') maybeAutoPullOnReturn();
@@ -2307,6 +2331,7 @@
                         updateCloudStatusBadge();
                         pullFirestoreData().catch(() => {});
                         retryPendingPhotoUploads().catch(() => {});
+                        retryPendingFloorplanUploads().catch(() => {});
                         showToast("已取得雲端存取權限");
                     } else {
                         showDriveError('drive-signin-error', "未取得雲端存取權限，請重試");
@@ -2689,6 +2714,35 @@
                 .then(file => file.id);
         }
 
+        // 把底圖原始檔案(PDF或圖片)上傳到這個專案的 01_plan 資料夾，取得 Drive file id；
+        // 讓一般本機直接上傳的底圖也能跟「雲端匯入」進來的底圖一樣，被其他裝置自動補抓到
+        function uploadPlanFileToDrive(base64DataUrl, filename, mimeType) {
+            if (!currentUser || !googleAccessToken) return Promise.reject(new Error("未登入"));
+
+            return idbGetAsync("projects", currentProjectId)
+                .then(project => ensurePlanFolderId(project))
+                .then(folderId => {
+                    const base64Body = base64DataUrl.substring(base64DataUrl.indexOf(',') + 1);
+                    const metadata = { name: filename, parents: [folderId] };
+                    const boundary = 'ycla_boundary_' + Date.now();
+                    const body =
+                        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+                        `--${boundary}\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64Body}\r\n` +
+                        `--${boundary}--`;
+
+                    return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true', {
+                        method: 'POST',
+                        headers: {
+                            Authorization: `Bearer ${googleAccessToken}`,
+                            'Content-Type': `multipart/related; boundary=${boundary}`
+                        },
+                        body: body
+                    });
+                })
+                .then(res => { if (!res.ok) throw new Error('上傳底圖到 Drive 失敗'); return res.json(); })
+                .then(file => file.id);
+        }
+
         // 在 Drive 上把既有檔案複製成一份新檔案(新的 file id)，放進指定資料夾並改新檔名；
         // 用於「複製專案」時讓新專案擁有自己獨立的照片檔案，不會共用原專案的檔案(避免之後改名互相影響)
         async function copyDriveFile(fileId, newParentFolderId, newName) {
@@ -2818,6 +2872,7 @@
                 });
 
             retryPendingPhotoUploads().catch(() => {});
+            retryPendingFloorplanUploads().catch(() => {});
         }
 
         async function mergeRemoteProject(projectId, data) {
@@ -3672,6 +3727,40 @@
                 }
             } finally {
                 retryingPendingUploads = false;
+            }
+        }
+
+        // 底圖也可能是用「一般本機上傳」建立的(不是從雲端匯入)，若當時還沒登入或上傳失敗，
+        // 就會變成只存在建立當下那台裝置的本機，其他裝置永遠看不到；跟照片一樣自我修復：
+        // 重新開啟 App 且已登入時，自動找出「本機有底圖圖片、但沒有 driveFileId」的圖頁補傳一次
+        let retryingPendingFloorplanUploads = false;
+        async function retryPendingFloorplanUploads() {
+            if (!currentUser || !googleAccessToken || retryingPendingFloorplanUploads || !currentProjectId) return;
+            retryingPendingFloorplanUploads = true;
+            try {
+                const projectFloorplans = await idbGetAllByIndexAsync("floorplans", "projectId", currentProjectId);
+                const pending = projectFloorplans.filter(fp => fp.data && !fp.driveFileId);
+                for (const fp of pending) {
+                    try {
+                        // fp.data 已經是這一頁渲染完成的圖片(即使原始檔是PDF也一樣)，直接當成一般圖片上傳即可，
+                        // 不需要也不可能還原回原始 PDF
+                        const driveFileId = await uploadPlanFileToDrive(fp.data, `${fp.name || fp.filename || 'floorplan'}.jpg`, 'image/jpeg');
+                        fp.driveFileId = driveFileId;
+                        fp.driveMimeType = 'image/jpeg';
+                        await idbPutAsync("floorplans", fp);
+                        pushFloorplanDoc(fp);
+
+                        const local = floorplans.find(f => f.id === fp.id);
+                        if (local) {
+                            local.driveFileId = driveFileId;
+                            local.driveMimeType = 'image/jpeg';
+                        }
+                    } catch (err) {
+                        console.error("補傳底圖到雲端失敗", fp.id, err);
+                    }
+                }
+            } finally {
+                retryingPendingFloorplanUploads = false;
             }
         }
 
